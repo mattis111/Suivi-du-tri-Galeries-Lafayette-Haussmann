@@ -444,3 +444,5 @@ main.wide { max-width: 680px; }
 .thumb span { font-size: 10px; color: var(--muted); }
 .thumb:hover img { border-color: var(--ink); }
 .app-version { text-align: center; font-family: var(--mono); font-size: 9.5px; color: #B5B1A8; padding: 0 0 18px; }
+.pending { background: #FBF4E4; border: 1px solid #E8D3A0; color: #7A5A12; border-radius: 6px; padding: 8px 10px; font-size: 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pending .linkbtn { color: #7A5A12; text-decoration: underline; margin-left: auto; }

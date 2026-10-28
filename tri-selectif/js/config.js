@@ -11,27 +11,13 @@
 window.APP_CONFIG = {
   organisation: "DESPS",
 
-  // COMPTES UTILISATEURS
-  // Rôles : "admin" (tout + gestion des comptes), "superviseur" (contrôle + suivi + exports),
-  //         "agent" (saisie des contrôles uniquement).
-  // Les mots de passe ne sont jamais écrits en clair : "sel" + "hash" sont générés
-  // par l'appli (Suivi > Comptes, réservé à l'admin). Copie-colle la liste générée ici.
-  comptes: [
-    { identifiant: "Admin", nom: "Admin", role: "admin",
-      sel: "1752470aaaf7a91b", hash: "db83f86a7525be31c1b424ff52f633574a3ebbc21e1da9cb146cf107242407a2" },
-    { identifiant: "samir", nom: "Samir", role: "agent",
-      sel: "2a04102c750d5f0f", hash: "5cf66125c2b69225960cb1b324d44d6c5a415c65d5249f1b4257a4f45944911d" },
-    { identifiant: "mattis", nom: "Mattis", role: "responsable",
-      sel: "3a277c10ff2ebd39", hash: "283086fb31361a901f6a5f469105af0649f035f4d0e013dbcf2d5f3cf0b814d3" },
-    { identifiant: "barbara", nom: "Barbara", role: "responsable",
-      sel: "4f3b5856b0fecddc", hash: "3f74a4ac7f1bc66aeafb7341995128660f0c059f211646b4e4989e45495761d2" },
-    { identifiant: "hicham", nom: "Hicham", role: "responsable",
-      sel: "bbf17d4e0096743a", hash: "7360ab6d159b86021a37a50ee987eb2edf50dbb6a09861fa23f652101ba846ab" },
-    { identifiant: "khatri", nom: "Khatri", role: "responsable",
-      sel: "32d69cee29829df8", hash: "e1b7539c95f5c618cc62a9f8a729c0d248be396a9391de89b098a32bae8a392d" },
-    { identifiant: "hamid", nom: "Hamid", role: "agent",
-      sel: "a605d895364dcd88", hash: "1847a950598021ba6f7e8baa90f08c1837f86f9c3b0e433d476fb4197e23f405" }
-  ],
+  // BASE DE DONNÉES EN LIGNE (Supabase) : contrôles, photos et comptes partagés entre tous les appareils.
+  // Les comptes se gèrent dans l'appli : Suivi > Comptes (administrateur).
+  // La clé ci-dessous est la clé PUBLIQUE ("publishable") : elle peut être visible sans risque.
+  supabase: {
+    url: "https://gciscgfvczuovcrioejk.supabase.co",
+    cle: "sb_publishable_DzE1EKWjRH42mCu77ZWV7Q_BMV33ORo"
+  },
 
   dechets: [
     "Rolls cartons",

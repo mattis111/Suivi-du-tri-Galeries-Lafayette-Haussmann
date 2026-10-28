@@ -27,16 +27,17 @@
       try { const v = localStorage.getItem("tri." + key); return v ? JSON.parse(v) : fallback; }
       catch (e) { return fallback; }
     },
-    set(key, value) {
+    set(key, value, quiet) {
       try { localStorage.setItem("tri." + key, JSON.stringify(value)); return true; }
-      catch (e) { toast("Mémoire du navigateur pleine : exporte puis efface d'anciennes données."); return false; }
+      catch (e) { if (!quiet) toast("Mémoire du navigateur pleine : exporte puis efface d'anciennes données."); return false; }
     },
     del(key) { try { localStorage.removeItem("tri." + key); } catch (e) {} }
   };
 
   const S = {
-    user: null, role: null, ident: null,
-    records: store.get("records", []),
+    user: null, role: null, ident: null, jeton: null,
+    records: [],
+    outbox: store.get("outbox", []),      // contrôles en attente d'envoi (pas de réseau)
     draft: store.get("draft", {}),
     ui: store.get("ui", { mag: 0, pal: 0, niv: {} }),
     hist: { period: "", mag: "", pal: "", niv: "", agent: "", statut: "", du: "", au: "", q: "", size: 20, page: 0 },
@@ -44,7 +45,9 @@
     ana: { mag: 0, pal: 0, niv: 0, dechet: "" },
     dash: { weeks: 12, agent: "", dechet: "" }
   };
-  const saveRecords = () => store.set("records", S.records);
+  // En ligne : copie locale de l'historique (pour l'affichage hors réseau). Hors ligne : stockage principal.
+  const saveRecords = () => (ONLINE ? store.set("cache", S.records.filter(r => !r._attente), true) || true : store.set("records", S.records));
+  const saveOutbox = () => store.set("outbox", S.outbox);
   const saveDraft = () => store.set("draft", S.draft);
   const saveUi = () => store.set("ui", S.ui);
 
@@ -60,7 +63,8 @@
   };
   const ACCOUNTS = CFG.comptes || [];
   const findAccount = id => ACCOUNTS.find(a => a.identifiant.toLowerCase() === String(id || "").trim().toLowerCase());
-  const can = perm => !!(S.role && ROLES[S.role] && ROLES[S.role].perms.includes(perm));
+  // En ligne, pas de données de démo : elles se mélangeraient aux vrais contrôles de tout le monde.
+  const can = perm => !(perm === "demo" && ONLINE) && !!(S.role && ROLES[S.role] && ROLES[S.role].perms.includes(perm));
   async function sha256(text) {
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
     return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
@@ -68,14 +72,67 @@
   const hashFor = (sel, id, pw) => sha256(`${sel}:${id.trim().toLowerCase()}:${pw}`);
   const newSalt = () => [...crypto.getRandomValues(new Uint8Array(8))].map(b => b.toString(16).padStart(2, "0")).join("");
   function openSession(acc) {
-    S.user = acc.nom || acc.identifiant; S.role = acc.role; S.ident = acc.identifiant;
+    S.user = acc.nom || acc.identifiant; S.role = acc.role; S.ident = acc.identifiant; S.jeton = acc.jeton || null;
   }
-  // Session mémorisée : on relit toujours le rôle dans config.js (un compte supprimé n'a plus accès).
+
+  /* ---------------- Base de données en ligne (Supabase) ---------------- */
+  const SB = CFG.supabase && CFG.supabase.url && CFG.supabase.cle ? CFG.supabase : null;
+  const ONLINE = !!SB;
+  const ERREURS = {
+    IDENTIFIANTS_INVALIDES: "Identifiant ou mot de passe incorrect.",
+    SESSION_EXPIREE: "Ta session a expiré : reconnecte-toi.",
+    NON_AUTORISE: "Action non autorisée pour ton compte.",
+    MOT_DE_PASSE_TROP_COURT: "Mot de passe : 6 caractères minimum.",
+    MOT_DE_PASSE_OBLIGATOIRE: "Le mot de passe est obligatoire pour un nouveau compte.",
+    DERNIER_ADMIN: "Il faut garder au moins un administrateur.",
+    SUPPRESSION_DE_SOI: "Tu ne peux pas supprimer ton propre compte.",
+    RESEAU: "Pas de connexion internet. Réessaie quand le réseau revient."
+  };
+  const errMsg = e => ERREURS[e && e.message] || "Erreur du serveur : " + ((e && e.message) || "inconnue");
+  async function api(fn, params) {
+    let res;
+    try {
+      res = await fetch(SB.url.replace(/\/+$/, "") + "/rest/v1/rpc/" + fn, {
+        method: "POST",
+        headers: { apikey: SB.cle, "Content-Type": "application/json" },
+        body: JSON.stringify(params || {})
+      });
+    } catch (e) { const err = new Error("RESEAU"); err.reseau = true; throw err; }
+    const txt = await res.text();
+    if (!res.ok) {
+      let m = ""; try { m = JSON.parse(txt).message || ""; } catch (e) {}
+      const err = new Error(m || "HTTP_" + res.status); if (res.status >= 500 || res.status === 0) err.reseau = true; throw err;
+    }
+    return txt ? JSON.parse(txt) : null;
+  }
+  // Appel avec la session de l'utilisateur ; une session expirée renvoie à l'écran de connexion.
+  async function call(fn, params) {
+    try { return await api(fn, Object.assign({ p_jeton: S.jeton }, params || {})); }
+    catch (e) {
+      if (e.message === "SESSION_EXPIREE") { closeSession(); toast(ERREURS.SESSION_EXPIREE); route(); }
+      throw e;
+    }
+  }
+  function closeSession() {
+    S.user = S.role = S.ident = S.jeton = null;
+    store.del("session"); store.del("cache"); store.del("syncAt");
+    S.records = ONLINE ? [] : store.get("records", []);
+    photoCache = {};
+  }
+  let photoCache = {};    // photos déjà chargées : "idControle|déchet" -> image
+
+  // Session mémorisée sur l'appareil.
   (function restoreSession() {
     store.del("user");
     const sess = store.get("session", null);
-    const acc = sess && findAccount(sess.identifiant);
-    if (acc && ROLES[acc.role]) openSession(acc); else store.del("session");
+    if (ONLINE) {
+      if (sess && sess.jeton && ROLES[sess.role]) { openSession(sess); S.records = store.get("cache", []); }
+      else store.del("session");
+    } else {
+      const acc = sess && findAccount(sess.identifiant);
+      if (acc && ROLES[acc.role]) openSession(acc); else store.del("session");
+      S.records = store.get("records", []);
+    }
   })();
 
   /* ---------------- Utilitaires ---------------- */
@@ -172,6 +229,21 @@
       e.preventDefault();
       const id = document.getElementById("login-id").value, pw = document.getElementById("login-pw").value;
       const btn = e.target.querySelector("button"); btn.disabled = true;
+      if (ONLINE) {
+        try {
+          const acc = await api("tri_connexion", { p_identifiant: id, p_mot_de_passe: pw });
+          openSession(acc);
+          store.set("session", acc);
+          S.records = [];
+          location.hash = "#/controle";
+          route();
+          syncAll(true);
+        } catch (ex) {
+          err(errMsg(ex));
+          if (ex.message === "IDENTIFIANTS_INVALIDES") document.getElementById("login-pw").value = "";
+        } finally { btn.disabled = false; }
+        return;
+      }
       try {
         const acc = findAccount(id);
         const ok = acc && ROLES[acc.role] && (await hashFor(acc.sel, acc.identifiant, pw)) === acc.hash;
@@ -294,6 +366,7 @@
           <textarea id="note-field" rows="2" placeholder="Remarque libre pour ${h(niv)} (facultatif)">${h((values.__note) || "")}</textarea>
         </div>` : ""}
         <div class="send-wrap">
+          <div class="pending" id="pending" ${ONLINE && myOutbox().length ? "" : "hidden"}>⏳ <b>${ONLINE ? myOutbox().length : 0}</b> niveau(x) en attente d'envoi (pas de réseau) <button class="linkbtn" data-act="retry">Réessayer</button></div>
           <button class="btn-dark" data-act="send" ${draftCount ? "" : "disabled"}>🚀 TOUT envoyer${draftCount ? ` (${draftCount} niveau${draftCount > 1 ? "x" : ""})` : ""}</button>
         </div>
       </section>`;
@@ -355,12 +428,116 @@
       });
       const rec = { id: uid(), date: now, agent: S.user, magasin, palier, niveau, items };
       if (noteOf(S.draft[k])) rec.autre = noteOf(S.draft[k]);
-      S.records.push(rec);
+      if (ONLINE) { rec._compte = S.ident; S.outbox.push(rec); } else S.records.push(rec);
     });
+    const nb = `${keys.length} niveau${keys.length > 1 ? "x" : ""}`;
+    if (ONLINE) {
+      if (!saveOutbox()) { S.outbox.splice(S.outbox.length - keys.length); return; }
+      S.draft = {}; saveDraft();
+      addPendingToRecords();
+      renderControle();
+      toast(`⏳ Envoi de ${nb}…`);
+      flushOutbox(true);
+      return;
+    }
     if (!saveRecords()) { S.records.splice(S.records.length - keys.length); return; }
     S.draft = {}; saveDraft();
-    toast(`✓ ${keys.length} niveau${keys.length > 1 ? "x" : ""} envoyé${keys.length > 1 ? "s" : ""} à ${frTime(new Date(now)).slice(0, 5)} — la saisie est vide, prête pour le prochain passage`);
+    toast(`✓ ${nb} envoyé${keys.length > 1 ? "s" : ""} à ${frTime(new Date(now)).slice(0, 5)} — la saisie est vide, prête pour le prochain passage`);
     renderControle();
+  }
+
+  /* ---------------- Envoi et synchronisation en ligne ---------------- */
+  const myOutbox = () => S.outbox.filter(r => r._compte === S.ident);
+  const sortRecords = () => S.records.sort((a, b) => a.date.localeCompare(b.date));
+  // Les contrôles pas encore reçus par le serveur restent visibles (marqués "en attente").
+  function addPendingToRecords() {
+    const have = new Set(S.records.map(r => r.id));
+    myOutbox().forEach(r => {
+      if (have.has(r.id)) return;
+      const copy = Object.assign({}, r, { _attente: true, items: r.items.map(i => {
+        if (typeof i.photo === "string") { photoCache[r.id + "|" + i.dechet] = i.photo; return Object.assign({}, i, { photo: true }); }
+        return i;
+      }) });
+      delete copy._compte;
+      S.records.push(copy);
+    });
+    sortRecords();
+  }
+
+  let flushing = false;
+  async function flushOutbox(fromSend) {
+    if (!ONLINE || !S.jeton || flushing) return;
+    const mine = myOutbox();
+    if (!mine.length) return;
+    flushing = true;
+    let sent = 0;
+    try {
+      for (let i = 0; i < mine.length; i += 8) {          // par paquets (les photos peuvent être lourdes)
+        const batch = mine.slice(i, i + 8).map(r => { const c = Object.assign({}, r); delete c._compte; return c; });
+        await call("tri_envoyer", { p_controles: batch });
+        const ids = new Set(batch.map(r => r.id));
+        S.outbox = S.outbox.filter(r => !ids.has(r.id)); saveOutbox();
+        S.records.forEach(r => { if (ids.has(r.id)) delete r._attente; });
+        sent += batch.length;
+      }
+      saveRecords();
+      toast(`✓ ${sent} niveau${sent > 1 ? "x" : ""} envoyé${sent > 1 ? "s" : ""} à ${frTime(new Date()).slice(0, 5)} — la saisie est vide, prête pour le prochain passage`);
+    } catch (e) {
+      if (e.reseau) {
+        if (fromSend) toast(`📶 Pas de réseau : ${myOutbox().length} niveau(x) gardé(s) sur l'appareil. Envoi automatique dès le retour du réseau.`);
+      } else if (e.message !== "SESSION_EXPIREE") toast(errMsg(e));
+    } finally {
+      flushing = false;
+      refreshPending();
+    }
+  }
+  function refreshPending() {
+    const n = myOutbox().length, el = document.getElementById("pending");
+    if (el) { el.hidden = !n; el.querySelector("b").textContent = n; }
+    if (location.hash.indexOf("suivi") < 0 && !(document.activeElement && document.activeElement.matches("input, textarea"))) {
+      const tiles = document.getElementById("floors");
+      if (tiles && S.user) renderControle();
+    }
+  }
+
+  // Récupère les nouveaux contrôles (ou tout l'historique si "full").
+  let syncing = null;
+  function syncRecords(full) {
+    if (!ONLINE || !S.jeton) return Promise.resolve(false);
+    if (syncing) return syncing;
+    syncing = (async () => {
+      const since = full ? null : store.get("syncAt", null);
+      const list = await call("tri_controles", { p_depuis: since });
+      list.forEach(r => { r.date = new Date(r.date).toISOString(); });   // même format de date partout (tri fiable)
+      let changed = full;
+      if (full) S.records = list;
+      else {
+        const byId = new Map(S.records.map(r => [r.id, r]));
+        list.forEach(r => { const old = byId.get(r.id); if (!old || old._attente) changed = true; byId.set(r.id, r); });
+        S.records = [...byId.values()];
+      }
+      const maxRecu = list.reduce((m, r) => (r.recu && r.recu > m ? r.recu : m), since || "");
+      if (maxRecu) store.set("syncAt", maxRecu, true);
+      addPendingToRecords();
+      sortRecords(); saveRecords();
+      return changed;
+    })().finally(() => { syncing = null; });
+    return syncing;
+  }
+  // Envoie ce qui est en attente puis met à jour l'historique ; réaffiche le Suivi si besoin.
+  async function syncAll(full) {
+    if (!ONLINE || !S.jeton) return;
+    try {
+      await flushOutbox();
+      const changed = await syncRecords(full);
+      if (changed && location.hash.indexOf("suivi") >= 0) route();
+      else if (changed) refreshPending();
+    } catch (e) { /* hors réseau : on garde la copie locale */ }
+  }
+  if (ONLINE) {
+    window.addEventListener("online", () => syncAll(false));
+    setInterval(() => { if (document.visibilityState === "visible") syncAll(false); }, 60000);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncAll(false); });
   }
 
   /* ---------------- Suivi : historique & supervision ---------------- */
@@ -484,9 +661,41 @@
   }
 
   // Miniature de la photo d'un mal trié ; un clic l'ouvre en grand.
-  const photoThumb = (r, i) => i.photo
-    ? `<button class="thumb" data-act="showphoto" data-id="${r.id}" data-d="${h(i.dechet)}" title="Agrandir la photo"><img src="${i.photo}" alt="Photo ${h(i.dechet)}" loading="lazy"><span>🔍 Agrandir</span></button>`
-    : "";
+  const photoSrc = (r, i) => (typeof i.photo === "string" ? i.photo : photoCache[r.id + "|" + i.dechet] || "");
+  const photoThumb = (r, i) => {
+    if (!i.photo) return "";
+    const src = photoSrc(r, i);
+    return `<button class="thumb" data-act="showphoto" data-id="${r.id}" data-d="${h(i.dechet)}" title="Agrandir la photo"><img ${src ? `src="${src}"` : `data-ph="${h(r.id + "|" + i.dechet)}"`} alt="Photo ${h(i.dechet)}"><span>🔍 Agrandir</span></button>`;
+  };
+  // Charge une photo depuis le serveur (en ligne) et la garde en mémoire.
+  async function getPhoto(id, dechet) {
+    const k = id + "|" + dechet;
+    if (photoCache[k]) return photoCache[k];
+    const r = S.records.find(x => x.id === id);
+    const it = r && r.items.find(i => i.dechet === dechet);
+    if (it && typeof it.photo === "string") return it.photo;
+    if (!ONLINE) return "";
+    const img = await call("tri_photo", { p_controle: id, p_dechet: dechet });
+    if (img) photoCache[k] = img;
+    return img || "";
+  }
+  // Remplit les miniatures affichées dont l'image n'est pas encore chargée.
+  let hydrating = false;
+  async function hydratePhotos() {
+    if (hydrating) return;
+    hydrating = true;
+    try {
+      let imgs;
+      while ((imgs = [...document.querySelectorAll("img[data-ph]:not([data-loading])")]).length) {
+        const el = imgs[0]; el.setAttribute("data-loading", "1");
+        const k = el.getAttribute("data-ph"), cut = k.indexOf("|");
+        try { const src = await getPhoto(k.slice(0, cut), k.slice(cut + 1)); if (src) { el.src = src; el.removeAttribute("data-ph"); } else el.alt = "Photo indisponible"; }
+        catch (e) { el.alt = "Photo indisponible hors réseau"; }
+      }
+    } finally { hydrating = false; }
+  }
+  new MutationObserver(() => { if (document.querySelector("img[data-ph]:not([data-loading])")) hydratePhotos(); })
+    .observe(document.getElementById("app"), { childList: true, subtree: true });
 
   function renderHistResults() {
     const F = S.hist, recs = filteredRecords();
@@ -562,9 +771,14 @@
     if (!rows.length) return toast("Aucun élément mal trié pour ces critères.");
     download(XlsxWriter.build([HEAD, ...rows.map(x => x.cols)], "Mal triés"), `mal-tries-${stamp()}.xlsx`);
   }
-  function exportPdf() {
+  async function exportPdf() {
     const rows = exportRows(true);
     if (!rows.length) return toast("Aucun élément mal trié pour ces critères.");
+    const withPhoto = rows.filter(x => x.i.photo);
+    if (withPhoto.length) {
+      toast(`Préparation du PDF (${withPhoto.length} photo(s))…`);
+      for (const x of withPhoto) { try { x.src = await getPhoto(x.r.id, x.i.dechet); } catch (e) { x.src = ""; } }
+    }
     const F = S.hist;
     const crit = [F.du && "du " + F.du.split("-").reverse().join("/"), F.au && "au " + F.au.split("-").reverse().join("/"),
       F.mag, F.pal, F.niv, F.agent].filter(Boolean).join(" · ") || "Toutes périodes";
@@ -580,7 +794,7 @@
       <h1>Éléments mal triés — ${h(CFG.organisation)}</h1>
       <div class="sub">${h(crit)} · ${rows.length} élément(s) · édité le ${frDate(new Date())} par ${h(S.user)}</div>
       <table><thead><tr><th>Date</th><th>Agent</th><th>Magasin</th><th>Palier</th><th>Niveau</th><th>Déchet</th><th>Commentaire</th><th>Photo</th></tr></thead><tbody>
-      ${rows.map(({ r, i, d }) => `<tr><td>${frDate(d)} ${frTime(d).slice(0, 5)}</td><td>${h(r.agent)}</td><td>${h(r.magasin)}</td><td>${h(r.palier)}</td><td>${h(r.niveau)}</td><td>${h(i.dechet)}</td><td>${h(i.commentaire || "")}</td><td>${i.photo ? `<img src="${i.photo}">` : ""}</td></tr>`).join("")}
+      ${rows.map(({ r, i, d }) => `<tr><td>${frDate(d)} ${frTime(d).slice(0, 5)}</td><td>${h(r.agent)}</td><td>${h(r.magasin)}</td><td>${h(r.palier)}</td><td>${h(r.niveau)}</td><td>${h(i.dechet)}</td><td>${h(i.commentaire || "")}</td><td>${i.photo && (rows.find(x => x.i === i) || {}).src ? `<img src="${rows.find(x => x.i === i).src}">` : ""}</td></tr>`).join("")}
       </tbody></table></body></html>`;
     const frame = document.createElement("iframe");
     frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
@@ -1158,8 +1372,63 @@
       `    { identifiant: ${q(a.identifiant)}, nom: ${q(a.nom)}, role: ${q(a.role)},\n      sel: ${q(a.sel)}, hash: ${q(a.hash)} }`).join(",\n") + "\n  ],";
   }
 
+  /* Comptes en ligne : enregistrés directement sur le serveur, actifs tout de suite. */
+  let onlineAccounts = null;
+  async function renderComptesOnline(editId, reload) {
+    const body = document.getElementById("suivi-body");
+    if (!onlineAccounts || reload) {
+      body.innerHTML = `<div class="card empty mt2">Chargement des comptes…</div>`;
+      try { onlineAccounts = await call("tri_comptes"); }
+      catch (e) { body.innerHTML = `<div class="card empty mt2">${h(errMsg(e))}</div>`; return; }
+    }
+    const ed = editId ? onlineAccounts.find(a => a.identifiant === editId) : null;
+    const roleOpt = cur => Object.entries(ROLES).map(([k, r]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${r.label}</option>`).join("");
+    body.innerHTML = `
+      <section class="card mt2">
+        <div class="card-head"><h2 style="font-family:var(--sans);font-size:13px">Comptes (${onlineAccounts.length})</h2>
+          <span class="tag bien">Enregistrés en ligne</span></div>
+        <div class="matrix-wrap"><table class="matrix acc">
+          <thead><tr><th>Identifiant</th><th>Nom affiché</th><th>Rôle</th><th></th></tr></thead>
+          <tbody>${onlineAccounts.map(a => `<tr>
+            <th>${h(a.identifiant)}${a.identifiant === S.ident ? ` <span class="label">(toi)</span>` : ""}</th>
+            <td>${h(a.nom)}</td><td><span class="role-tag ${a.role}">${h(ROLES[a.role] ? ROLES[a.role].label : a.role)}</span></td>
+            <td style="white-space:nowrap"><button class="linkbtn" data-act="oaccedit" data-id="${h(a.identifiant)}">Modifier</button>
+              ${a.identifiant === S.ident ? "" : `· <button class="linkbtn danger" data-act="oaccdel" data-id="${h(a.identifiant)}">Supprimer</button>`}</td>
+          </tr>`).join("")}</tbody>
+        </table></div>
+      </section>
+      <form class="card mt acc-form" id="acc-form" autocomplete="off">
+        <div class="label">${ed ? "Modifier le compte " + h(ed.identifiant) : "Ajouter un compte"}</div>
+        <div class="acc-grid">
+          <label>Identifiant<input id="acc-id" required value="${ed ? h(ed.identifiant) : ""}" ${ed ? "readonly" : ""} autocapitalize="none" placeholder="ex. samir"></label>
+          <label>Nom affiché<input id="acc-nom" required value="${ed ? h(ed.nom) : ""}" placeholder="ex. Samir"></label>
+          <label>Rôle<select id="acc-role">${roleOpt(ed ? ed.role : "agent")}</select></label>
+          <label>Mot de passe<input id="acc-pw" type="password" autocomplete="new-password" ${ed ? `placeholder="laisser vide = inchangé"` : "required"} minlength="6"></label>
+        </div>
+        <div class="row mt">
+          <button class="btn-dark" type="submit" style="width:auto;padding:9px 16px">${ed ? "Enregistrer" : "Ajouter le compte"}</button>
+          ${ed ? `<button class="btn" type="button" data-act="oacccancel">Annuler</button>` : ""}
+        </div>
+        <p class="hint">Les changements sont actifs immédiatement, sur tous les appareils. Changer le mot de passe d'un compte le déconnecte de ses autres appareils.<br>
+        Agent : saisie des contrôles uniquement · Superviseur : paliers + consultation et export des données · Responsable : tout sauf l'effacement des données et les comptes · Administrateur : tout.</p>
+      </form>`;
+    document.getElementById("acc-form").onsubmit = async e => {
+      e.preventDefault();
+      const id = document.getElementById("acc-id").value.trim().toLowerCase();
+      if (!/^[a-z0-9._-]{2,40}$/.test(id)) return toast("Identifiant : lettres sans accent, chiffres, point, tiret (2 à 40 caractères).");
+      const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+      try {
+        await call("tri_compte_enregistrer", { p_identifiant: id, p_nom: document.getElementById("acc-nom").value,
+          p_role: document.getElementById("acc-role").value, p_mot_de_passe: document.getElementById("acc-pw").value || null });
+        toast(ed ? "Compte modifié" : "Compte créé — il peut se connecter tout de suite");
+        renderComptesOnline(null, true);
+      } catch (ex) { toast(errMsg(ex)); btn.disabled = false; }
+    };
+  }
+
   function renderComptes(editId) {
     if (!can("comptes")) return;
+    if (ONLINE) return renderComptesOnline(editId, !editId);
     if (!draftAccounts) draftAccounts = JSON.parse(JSON.stringify(ACCOUNTS));
     const ed = editId ? draftAccounts.find(a => a.identifiant === editId) : null;
     const roleOpt = cur => Object.entries(ROLES).map(([k, r]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${r.label}</option>`).join("");
@@ -1337,13 +1606,15 @@
     const el = e.target.closest("[data-act]");
     if (!el || el.tagName === "INPUT") return;
     const a = el.dataset.act;
-    const NEED = { csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes" };
+    const NEED = { csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
     if (NEED[a] && !can(NEED[a])) { toast("Action non autorisée pour ton compte."); return; }
     switch (a) {
       case "go": location.hash = el.dataset.to; break;
       case "logout":
-        if (Object.keys(S.draft).length && !confirm("Des contrôles non envoyés seront conservés sur cet appareil. Se déconnecter ?")) return;
-        S.user = S.role = S.ident = null; store.del("session"); history.replaceState(null, "", location.pathname); route(); break;
+        if (ONLINE && myOutbox().length && !confirm(`${myOutbox().length} contrôle(s) n'ont pas encore pu être envoyés (pas de réseau). Ils partiront à ta prochaine connexion sur cet appareil. Se déconnecter quand même ?`)) return;
+        if (Object.keys(S.draft).length && !confirm("Une saisie non envoyée est en cours. Elle restera sur cet appareil. Se déconnecter ?")) return;
+        if (ONLINE && S.jeton) api("tri_deconnexion", { p_jeton: S.jeton }).catch(() => {});
+        closeSession(); history.replaceState(null, "", location.pathname); route(); break;
       case "mag": S.ui.mag = +el.dataset.i; S.ui.pal = 0; saveUi(); renderControle(); break;
       case "pal": S.ui.pal = +el.dataset.i; saveUi(); renderControle(); break;
       case "niv": S.ui.niv[current.palKey] = +el.dataset.i; saveUi(); renderControle(); break;
@@ -1364,7 +1635,14 @@
         ks.forEach(k => delete S.draft[k]); saveDraft(); renderControle(); break;
       }
       case "send": sendAll(); break;
-      case "refresh": S.records = store.get("records", []); route(); toast("Données actualisées"); break;
+      case "refresh":
+        if (ONLINE) {
+          toast("Actualisation…");
+          flushOutbox().then(() => syncRecords(true)).then(() => { route(); toast("Données actualisées"); })
+            .catch(e => toast(e.reseau ? "📶 Pas de réseau : affichage de la dernière copie enregistrée." : errMsg(e)));
+        } else { S.records = store.get("records", []); route(); toast("Données actualisées"); }
+        break;
+      case "retry": toast("Nouvel essai d'envoi…"); flushOutbox(true); break;
       case "period": {
         const p = el.dataset.p === S.hist.period ? "" : el.dataset.p;
         S.hist.period = p; [S.hist.du, S.hist.au] = periodRange(p); S.hist.page = 0;
@@ -1382,6 +1660,13 @@
         break;
       case "anaxlsx": exportAnalyse(); break;
       case "accedit": renderComptes(el.dataset.id); break;
+      case "oaccedit": renderComptesOnline(el.dataset.id); break;
+      case "oacccancel": renderComptesOnline(); break;
+      case "oaccdel":
+        if (!confirm(`Supprimer le compte ${el.dataset.id} ? Il ne pourra plus se connecter (ses contrôles restent dans l'historique).`)) return;
+        call("tri_compte_supprimer", { p_identifiant: el.dataset.id }).then(() => { toast("Compte supprimé"); renderComptesOnline(null, true); })
+          .catch(e => toast(errMsg(e)));
+        break;
       case "acccancel": renderComptes(); break;
       case "accdel": {
         const acc = draftAccounts.find(a => a.identifiant === el.dataset.id);
@@ -1404,7 +1689,12 @@
       case "dashxlsx": exportDashboard(); break;
       case "size": S.hist.size = +el.dataset.s; S.hist.page = 0; renderHistResults(); break;
       case "page": S.hist.page += +el.dataset.d; renderHistResults(); window.scrollTo({ top: 0, behavior: "smooth" }); break;
-      case "showphoto": {
+      case "showphoto": if (ONLINE) {
+        const r = S.records.find(x => x.id === el.dataset.id), it = r && r.items.find(i => i.dechet === el.dataset.d);
+        getPhoto(el.dataset.id, el.dataset.d).then(src => src && modal(`<img src="${src}" alt="Photo"><p class="label mt">${h(r.niveau)} · ${h(it.dechet)}${it.commentaire ? " · " + h(it.commentaire) : ""}</p>`))
+          .catch(e => toast(errMsg(e)));
+        break;
+      } else {
         const r = S.records.find(x => x.id === el.dataset.id);
         const it = r && r.items.find(i => i.dechet === el.dataset.d);
         if (it && it.photo) modal(`<img src="${it.photo}" alt="Photo"><p class="label mt">${h(r.niveau)} · ${h(it.dechet)}${it.commentaire ? " · " + h(it.commentaire) : ""}</p>`);
@@ -1423,10 +1713,23 @@
       case "demo": generateDemo(); break;
       case "wipe":
         if (!S.records.length) { toast("L'historique est déjà vide."); return; }
+        if (ONLINE) {
+          if (!confirm("Effacer DÉFINITIVEMENT tout l'historique, pour TOUS les comptes et tous les appareils ? Pense à exporter le CSV avant.")) return;
+          call("tri_effacer_tout").then(n => { S.records = []; store.del("syncAt"); saveRecords(); route(); toast(`Historique effacé (${n} contrôles)`); })
+            .catch(e => toast(errMsg(e)));
+          break;
+        }
         if (!confirm("Effacer définitivement tout l'historique de cet appareil ? Pense à exporter le CSV avant.")) return;
         S.records = []; saveRecords(); route(); toast("Historique effacé"); break;
     }
   });
 
   route();
+  // Au démarrage (en ligne) : vérifie la session, envoie ce qui attend, récupère les nouveaux contrôles.
+  if (ONLINE && S.jeton) {
+    call("tri_moi").then(me => {
+      if (me.role !== S.role || me.nom !== S.user) { openSession(Object.assign({}, me, { jeton: S.jeton })); store.set("session", Object.assign({}, me, { jeton: S.jeton })); route(); }
+    }).catch(() => {});
+    syncAll(!store.get("syncAt", null));
+  }
 })();

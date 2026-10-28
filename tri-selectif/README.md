@@ -9,22 +9,24 @@ Application web de contrôle du tri sélectif par magasin, palier, étage et typ
 - **Analyse par étage** : taux de respect du tri d'une poubelle précise sur un étage précis (ex. Rolls cartons, Provence, Étage 3), sur les dates de ton choix (7 ou 30 derniers jours, mois dernier, 3 derniers mois… ou dates libres), avec sa courbe semaine par semaine ; taux de tri de chaque poubelle pour chaque étage, avec un tableau de tous les étages et le détail de l'étage choisi (barres par catégorie, derniers mal triés), plus un export Excel. Taux de tri = bien triés ÷ (bien triés + mal triés).
 - **Supervision** : calendrier mensuel, avec une pastille pour le matin et une pour l'après-midi, et un taux de réalisation.
 
-## Comptes et accès
+## Données partagées (Supabase)
 
-Il faut se connecter avec un identifiant et un mot de passe. Il y a quatre rôles :
+Les contrôles, les photos et les comptes sont enregistrés dans une base de données en ligne (Supabase). Tous les appareils voient donc les mêmes données : un contrôle envoyé depuis le téléphone d'un agent apparaît dans le Suivi des responsables.
+
+- La base se prépare une seule fois, avec le script `tri-selectif-supabase.sql` (Supabase > SQL Editor > Run). Ne le mets pas sur GitHub : il contient les mots de passe de départ.
+- L'adresse du projet et la clé **publique** sont dans `js/config.js` (partie `supabase`). Ne mets jamais la clé « secret » ou « service_role » dans ce fichier.
+- **Sans réseau** (sous-sol, par exemple), l'envoi est gardé sur le téléphone et repart automatiquement dès le retour du réseau. Un bandeau « en attente d'envoi » l'indique.
+
+## Comptes et accès
 
 | Rôle | Accès |
 |---|---|
-| **Administrateur** | Tout : contrôle, suivi, supervision, exports, gestion des comptes, données de démo, effacement de l'historique |
-| **Responsable** | Tout (paliers, Historique, Tableau de bord, Analyse, Supervision, exports, données de démo), sauf l'**effacement des données** et l'onglet **Comptes** |
-| **Superviseur** | L'interface des paliers, et la consultation des données envoyées par les agents : Historique, Tableau de bord, Analyse par étage, exports. Pas de Supervision, pas de Comptes, pas de données de démo ni d'effacement |
-| **Agent** | Uniquement la saisie des contrôles par palier (aucun accès au Suivi) |
+| **Administrateur** | Tout : contrôle, suivi, supervision, exports, gestion des comptes, effacement de l'historique |
+| **Responsable** | Tout, sauf l'effacement des données et l'onglet Comptes |
+| **Superviseur** | Interface des paliers, et consultation et export des données (Historique, Tableau de bord, Analyse) |
+| **Agent** | Uniquement la saisie des contrôles. Il ne voit que ses propres envois |
 
-Compte de départ : identifiant **Admin**, avec tous les droits.
-
-**Ajouter ou modifier un compte (administrateur uniquement) :** connecte-toi en Admin, puis va dans **Suivi → 👥 Comptes**. Ajoute ou modifie les comptes, clique sur **Copier le bloc**, puis colle-le à la place du bloc `comptes: [ … ],` dans `js/config.js` sur GitHub (avec le crayon ✏️, puis **Commit changes**). Les mots de passe ne sont jamais écrits en clair : seule une empreinte chiffrée (SHA-256 avec sel) est enregistrée.
-
-À savoir : la connexion se fait dans le navigateur. Elle empêche l'accès normal à l'appli, mais ce n'est pas une sécurité de niveau bancaire. Choisis des mots de passe longs et différents de tes autres mots de passe.
+**Ajouter ou modifier un compte :** connecte-toi en Admin, puis va dans **Suivi → 👥 Comptes**. Les changements sont actifs immédiatement sur tous les appareils. Changer le mot de passe d'un compte le déconnecte de ses autres appareils.
 
 ## Mettre l'appli en ligne avec GitHub Pages
 
