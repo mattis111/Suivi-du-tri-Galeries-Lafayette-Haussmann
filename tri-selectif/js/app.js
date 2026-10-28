@@ -13,6 +13,17 @@
   };
   const TEXTE = CFG.champTexte || "";            // libellé de la zone de texte libre ("Autre")
   const noteOf = v => (v && typeof v.__note === "string" ? v.__note.trim() : "");
+  const MAX_PHOTOS_AUTRE = 4;
+  const MAX_PHOTOS_MAL = 3;
+  // Photos d'une poubelle dans la saisie (ancien format : une seule photo "photo")
+  const itemPhotosOf = v => (v ? (Array.isArray(v.photos) ? v.photos : v.photo ? [v.photo] : []) : []);
+  // Clé de la k-ième photo (1 à 3) d'une poubelle sur le serveur : "DIB", "DIB#2", "DIB#3"
+  const photoKey = (dechet, k) => (k === 1 ? dechet : dechet + "#" + k);
+  // Nombre de photos d'une poubelle dans un contrôle enregistré
+  const nbItemPhotos = i => (Array.isArray(i.photos) ? i.photos.length : i.nphotos ? +i.nphotos : i.photo ? 1 : 0);
+  const notePhotosOf = v => (v && Array.isArray(v.__photos) ? v.__photos : []);
+  // Nombre de photos « Autre » d'un contrôle (tableau d'images en attente, ou nombre venant du serveur)
+  const nbAutre = r => (Array.isArray(r.autre_photos) ? r.autre_photos.length : Math.max(0, Math.min(MAX_PHOTOS_AUTRE, +r.autre_photos || 0)));
   const ALL_DECHETS = [...new Set(DECHETS.concat(...Object.values(EXTRA)))];
   const STATUTS = {
     bien: { label: "Bien trié", icon: "✓" },
@@ -156,8 +167,11 @@
       id: str(r.id), date: str(r.date), agent: str(r.agent), compte: str(r.compte),
       magasin: str(r.magasin), palier: str(r.palier), niveau: str(r.niveau), recu: r.recu,
       autre: r.autre ? str(r.autre) : undefined,
+      autre_photos: Math.max(0, Math.min(4, parseInt(r.autre_photos, 10) || 0)),
       items: (Array.isArray(r.items) ? r.items : []).filter(i => i && statutOk(i.statut)).map(i => ({
-        dechet: str(i.dechet), statut: i.statut, commentaire: i.commentaire ? str(i.commentaire) : undefined, photo: i.photo ? true : undefined
+        dechet: str(i.dechet), statut: i.statut, commentaire: i.commentaire ? str(i.commentaire) : undefined,
+        photo: i.photo || i.nphotos ? true : undefined,
+        nphotos: i.photo || i.nphotos ? Math.max(1, Math.min(3, parseInt(i.nphotos, 10) || 1)) : undefined
       }))
     };
   }
@@ -424,12 +438,11 @@
       const extra = v.statut === "mal" ? `
         <div class="mal-extra">
           <input type="text" maxlength="300" placeholder="Commentaire (ex. carton non plié)" value="${h(v.commentaire || "")}" data-act="comment" data-d="${h(d)}">
-          <div class="photo-row">
-            ${safeImg(v.photo) ? `<img src="${safeImg(v.photo)}" alt="Photo" data-act="zoom">` : ""}
-            <label class="photo-btn">📷 ${v.photo ? "Changer la photo" : "Ajouter une photo"}
-              <input type="file" accept="image/*" capture="environment" hidden data-act="photo" data-d="${h(d)}">
-            </label>
-            ${v.photo ? `<button class="linkbtn" data-act="rmphoto" data-d="${h(d)}">Retirer</button>` : ""}
+          <div class="note-photos">
+            ${itemPhotosOf(v).map((src, n) => safeImg(src) ? `<span class="np"><img src="${safeImg(src)}" alt="Photo ${n + 1}" data-act="zoom"><button class="np-del" data-act="rmphoto" data-d="${h(d)}" data-n="${n}" title="Retirer cette photo">×</button></span>` : "").join("")}
+            ${itemPhotosOf(v).length < MAX_PHOTOS_MAL ? `<label class="photo-btn">📷 ${itemPhotosOf(v).length ? "Ajouter une photo" : "Ajouter des photos"} <small>(${itemPhotosOf(v).length}/${MAX_PHOTOS_MAL})</small>
+              <input type="file" accept="image/*" multiple hidden data-act="photo" data-d="${h(d)}">
+            </label>` : `<span class="label" style="letter-spacing:0">${MAX_PHOTOS_MAL}/${MAX_PHOTOS_MAL} photos</span>`}
           </div>
         </div>` : "";
       return `<div class="item"><div class="item-name">${h(d)}</div><div class="choices">${choices}</div>${extra}</div>`;
@@ -452,6 +465,12 @@
         ${TEXTE ? `<div class="item note-item">
           <label class="item-name" for="note-field">${h(TEXTE)}</label>
           <textarea id="note-field" rows="2" maxlength="1000" placeholder="Remarque libre pour ${h(niv)} (facultatif)">${h((values.__note) || "")}</textarea>
+          <div class="note-photos">
+            ${notePhotosOf(values).map((src, n) => safeImg(src) ? `<span class="np"><img src="${safeImg(src)}" alt="Photo ${n + 1}" data-act="zoom"><button class="np-del" data-act="rmnotephoto" data-n="${n}" title="Retirer cette photo">×</button></span>` : "").join("")}
+            ${notePhotosOf(values).length < MAX_PHOTOS_AUTRE ? `<label class="photo-btn">📷 ${notePhotosOf(values).length ? "Ajouter une photo" : "Ajouter des photos"} <small>(${notePhotosOf(values).length}/${MAX_PHOTOS_AUTRE})</small>
+              <input type="file" accept="image/*" multiple hidden data-act="notephoto">
+            </label>` : `<span class="label" style="letter-spacing:0">${MAX_PHOTOS_AUTRE}/${MAX_PHOTOS_AUTRE} photos</span>`}
+          </div>
         </div>` : ""}
         <div class="send-wrap">
           <div class="pending" id="pending" ${ONLINE && myOutbox().length && !envoiEnCours ? "" : "hidden"}>⏳ <b>${ONLINE ? myOutbox().length : 0}</b> niveau(x) en attente d'envoi (pas de réseau) <button class="linkbtn" data-act="retry">Réessayer</button></div>
@@ -469,17 +488,33 @@
       draftFor(mag.nom, pal.nom, niv).__note = note.value; saveDraft();
       if (!had) refreshSendButton();
     };
+    const np = $app.querySelector('input[data-act="notephoto"]');
+    if (np) np.onchange = async () => {
+      const dft = draftFor(mag.nom, pal.nom, niv);
+      const list = notePhotosOf(dft).slice();
+      const files = [...np.files];
+      const room = MAX_PHOTOS_AUTRE - list.length;
+      if (files.length > room) toast(`${MAX_PHOTOS_AUTRE} photos maximum : seules les ${room} première(s) sont ajoutées.`);
+      for (const f of files.slice(0, room)) {
+        try { list.push(await resizePhoto(f)); } catch (e) { toast("Impossible de lire une des images."); }
+      }
+      dft.__photos = list;
+      if (saveDraft()) renderControle();
+    };
     $app.querySelectorAll('input[data-act="comment"]').forEach(inp => {
       inp.oninput = () => { draftFor(mag.nom, pal.nom, niv)[inp.dataset.d].commentaire = inp.value; saveDraft(); };
     });
     $app.querySelectorAll('input[data-act="photo"]').forEach(inp => {
       inp.onchange = async () => {
-        const f = inp.files[0]; if (!f) return;
-        try {
-          const data = await resizePhoto(f);
-          draftFor(mag.nom, pal.nom, niv)[inp.dataset.d].photo = data;
-          if (saveDraft()) renderControle();
-        } catch (e) { toast("Impossible de lire cette image."); }
+        const v = draftFor(mag.nom, pal.nom, niv)[inp.dataset.d];
+        const list = itemPhotosOf(v).slice();
+        const files = [...inp.files], room = MAX_PHOTOS_MAL - list.length;
+        if (files.length > room) toast(`${MAX_PHOTOS_MAL} photos maximum par poubelle : seules les ${room} première(s) sont ajoutées.`);
+        for (const f of files.slice(0, room)) {
+          try { list.push(await resizePhoto(f)); } catch (e) { toast("Impossible de lire une des images."); }
+        }
+        v.photos = list; delete v.photo;
+        if (saveDraft()) renderControle();
       };
     });
     current = { mag, pal, niv, palKey };
@@ -501,7 +536,7 @@
   }
 
   function sendAll() {
-    const keys = Object.keys(S.draft).filter(k => countDone(S.draft[k], listOfKey(k)) > 0 || noteOf(S.draft[k]));
+    const keys = Object.keys(S.draft).filter(k => countDone(S.draft[k], listOfKey(k)) > 0 || noteOf(S.draft[k]) || notePhotosOf(S.draft[k]).length);
     if (!keys.length) { toast("Rien à envoyer."); return; }
     const missing = keys.reduce((s, k) => s + (countDone(S.draft[k], listOfKey(k)) ? listOfKey(k).length - countDone(S.draft[k], listOfKey(k)) : 0), 0);
     if (missing && !confirm(`${missing} élément(s) ne sont pas renseignés. Envoyer quand même ?`)) return;
@@ -511,11 +546,17 @@
       const items = listOfKey(k).filter(d => S.draft[k][d] && S.draft[k][d].statut).map(d => {
         const v = S.draft[k][d];
         const it = { dechet: d, statut: v.statut };
-        if (v.statut === "mal") { if (v.commentaire) it.commentaire = v.commentaire.trim(); if (v.photo) it.photo = v.photo; }
+        if (v.statut === "mal") {
+          if (v.commentaire) it.commentaire = v.commentaire.trim();
+          const ph = itemPhotosOf(v).filter(x => safeImg(x)).slice(0, MAX_PHOTOS_MAL);
+          if (ph.length) it.photos = ph;
+        }
         return it;
       });
       const rec = { id: uid(), date: now, agent: S.user, magasin, palier, niveau, items };
       if (noteOf(S.draft[k])) rec.autre = noteOf(S.draft[k]);
+      const nps = notePhotosOf(S.draft[k]).filter(x => safeImg(x)).slice(0, MAX_PHOTOS_AUTRE);
+      if (nps.length) rec.autre_photos = nps;
       if (ONLINE) { rec._compte = S.ident; S.outbox.push(rec); } else S.records.push(rec);
     });
     const nb = `${keys.length} niveau${keys.length > 1 ? "x" : ""}`;
@@ -543,9 +584,15 @@
     myOutbox().forEach(r => {
       if (have.has(r.id)) return;
       const copy = Object.assign({}, r, { _attente: true, items: r.items.map(i => {
-        if (typeof i.photo === "string") { photoCache[r.id + "|" + i.dechet] = i.photo; return Object.assign({}, i, { photo: true }); }
-        return i;
+        const list = Array.isArray(i.photos) ? i.photos : typeof i.photo === "string" ? [i.photo] : [];
+        if (!list.length) return i;
+        list.forEach((src, n) => { photoCache[r.id + "|" + photoKey(i.dechet, n + 1)] = src; });
+        const c = Object.assign({}, i, { photo: true, nphotos: list.length }); delete c.photos; return c;
       }) });
+      if (Array.isArray(r.autre_photos)) {
+        r.autre_photos.forEach((src, n) => { photoCache[r.id + "|Autre#" + (n + 1)] = src; });
+        copy.autre_photos = r.autre_photos.length;
+      }
       delete copy._compte;
       S.records.push(copy);
     });
@@ -560,7 +607,7 @@
     if (flushing) { if (visible) showLoading("Envoi en cours…", ""); await flushing.catch(() => {}); if (visible) hideLoading(); }
     const mine = myOutbox();
     if (!mine.length) return stop();
-    const total = mine.length, photos = mine.reduce((n, r) => n + r.items.filter(i => typeof i.photo === "string").length, 0);
+    const total = mine.length, photos = mine.reduce((n, r) => n + r.items.reduce((m, i) => m + (Array.isArray(i.photos) ? i.photos.length : typeof i.photo === "string" ? 1 : 0), 0) + (Array.isArray(r.autre_photos) ? r.autre_photos.length : 0), 0);
     const label = n => `${n}/${total} niveau${total > 1 ? "x" : ""}${photos ? ` · ${photos} photo${photos > 1 ? "s" : ""}` : ""}`;
     if (visible) { envoiEnCours = true; showLoading("Envoi en cours…", label(0)); }
     flushing = (async () => {
@@ -772,26 +819,45 @@
         if (!txt.includes(q)) continue;
       }
       const items = F.statut ? r.items.filter(i => i.statut === F.statut) : r.items;
-      if (!items.length && !(r.autre && !F.statut)) continue;
+      if (!items.length && !((r.autre || nbAutre(r)) && !F.statut)) continue;
       out.push({ ...r, items });
     }
     return out.sort((a, b) => b.date.localeCompare(a.date));
   }
 
   // Miniature de la photo d'un mal trié ; un clic l'ouvre en grand.
-  const photoSrc = (r, i) => safeImg(typeof i.photo === "string" ? i.photo : photoCache[r.id + "|" + i.dechet] || "");
+  // Miniatures des photos jointes à « Autre »
+  const autreThumbs = r => {
+    const n = nbAutre(r);
+    if (!n) return "";
+    let out = "";
+    for (let k = 1; k <= n; k++) out += photoThumb(r, { dechet: "Autre#" + k, photo: true }).replace("<span>🔍 Agrandir</span>", "");
+    return `<div class="autre-thumbs">${out}</div>`;
+  };
+  // Source locale de la k-ième photo d'une poubelle (saisie hors ligne) ou photo déjà chargée
+  const photoSrc = (r, i, k) => {
+    k = k || 1;
+    const local = Array.isArray(i.photos) ? i.photos[k - 1] : k === 1 && typeof i.photo === "string" ? i.photo : "";
+    return safeImg(local || photoCache[r.id + "|" + photoKey(i.dechet, k)] || "");
+  };
   const photoThumb = (r, i) => {
-    if (!i.photo) return "";
-    const src = photoSrc(r, i);
-    return `<button class="thumb" data-act="showphoto" data-id="${h(r.id)}" data-d="${h(i.dechet)}" title="Agrandir la photo"><img ${safeImg(src) ? `src="${safeImg(src)}"` : `data-ph="${h(r.id + "|" + i.dechet)}"`} alt="Photo ${h(i.dechet)}"><span>🔍 Agrandir</span></button>`;
+    const n = nbItemPhotos(i);
+    if (!n) return "";
+    let out = "";
+    for (let k = 1; k <= n; k++) {
+      const key = photoKey(i.dechet, k), src = photoSrc(r, i, k);
+      out += `<button class="thumb" data-act="showphoto" data-id="${h(r.id)}" data-d="${h(key)}" title="Agrandir la photo ${k}"><img ${src ? `src="${src}"` : `data-ph="${h(r.id + "|" + key)}"`} alt="Photo ${k} ${h(i.dechet)}"></button>`;
+    }
+    return `<div class="thumbs">${out}</div>`;
   };
   // Charge une photo depuis le serveur (en ligne) et la garde en mémoire.
   async function getPhoto(id, dechet) {
     const k = id + "|" + dechet;
     if (photoCache[k]) return photoCache[k];
     const r = S.records.find(x => x.id === id);
-    const it = r && r.items.find(i => i.dechet === dechet);
-    if (it && typeof it.photo === "string") return it.photo;
+    if (r) for (const i of r.items) for (let k = 1; k <= 3; k++) if (photoKey(i.dechet, k) === dechet) { const src = photoSrc(r, i, k); if (src) return src; }
+    const m = /^Autre#([1-4])$/.exec(dechet);
+    if (r && m && Array.isArray(r.autre_photos)) return r.autre_photos[m[1] - 1] || "";
     if (!ONLINE) return "";
     const img = await call("tri_photo", { p_controle: id, p_dechet: dechet });
     if (img) photoCache[k] = img;
@@ -836,7 +902,7 @@
             
             <span class="tag ${statutOk(i.statut) ? i.statut : ""}">${h(statutOk(i.statut) ? STATUTS[i.statut].label : "?")}</span>
           </div></div>`).join("")}
-        ${r.autre ? `<div class="rec-line note-line"><div>${h(TEXTE || "Autre")}</div><div class="note-text">${h(r.autre)}</div></div>` : ""}
+        ${r.autre || nbAutre(r) ? `<div class="rec-line note-line"><div>${h(TEXTE || "Autre")}${autreThumbs(r)}</div>${r.autre ? `<div class="note-text">${h(r.autre)}</div>` : ""}</div>` : ""}
       </section>`;
     }).join("");
 
@@ -868,9 +934,9 @@
       const d = new Date(r.date);
       r.items.forEach(i => {
         if (onlyMal && i.statut !== "mal") return;
-        rows.push({ r, i, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, i.dechet, STATUTS[i.statut].label, i.commentaire || "", i.photo ? "Oui" : "Non"] });
+        rows.push({ r, i, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, i.dechet, STATUTS[i.statut].label, i.commentaire || "", nbItemPhotos(i) ? `Oui (${nbItemPhotos(i)})` : "Non"] });
       });
-      if (!onlyMal && r.autre) rows.push({ r, i: { dechet: TEXTE || "Autre" }, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, TEXTE || "Autre", "Texte libre", r.autre, "Non"] });
+      if (!onlyMal && (r.autre || nbAutre(r))) rows.push({ r, i: { dechet: TEXTE || "Autre" }, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, TEXTE || "Autre", "Texte libre", r.autre || "", nbAutre(r) ? `Oui (${nbAutre(r)})` : "Non"] });
     });
     return rows;
   }
@@ -900,15 +966,18 @@
   // Charge TOUTES les photos d'un export (avec écran de chargement et nouveaux essais).
   // Renvoie false si une photo reste introuvable : l'export est alors annulé plutôt qu'incomplet.
   async function loadAllPhotos(rows, what) {
-    const need = rows.filter(x => x.i.photo);
+    // une tâche par photo : toutes les photos de chaque mal trié
+    const need = [];
+    rows.forEach(x => { x.srcs = []; for (let k = 1; k <= nbItemPhotos(x.i); k++) need.push({ x, k }); });
     if (!need.length) return true;
     showLoading(`Préparation ${what}…`, `Chargement des photos 0/${need.length}`);
     let done = 0, failed = 0;
-    const one = async x => {
-      for (let essai = 0; essai < 3 && !x.src; essai++) {
-        try { x.src = safeImg(await getPhoto(x.r.id, x.i.dechet)); } catch (e) { await new Promise(r => setTimeout(r, 800 * (essai + 1))); }
+    const one = async t => {
+      let src = "";
+      for (let essai = 0; essai < 3 && !src; essai++) {
+        try { src = safeImg(await getPhoto(t.x.r.id, photoKey(t.x.i.dechet, t.k))); } catch (e) { await new Promise(r => setTimeout(r, 800 * (essai + 1))); }
       }
-      if (!x.src) failed++;
+      if (src) t.x.srcs[t.k - 1] = src; else failed++;
       done++; updateLoading(done, need.length, `Chargement des photos ${done}/${need.length}`);
     };
     const queue = need.slice();
@@ -924,18 +993,20 @@
     const rows = exportRows(true);
     if (!rows.length) return toast("Aucun élément mal trié pour ces critères.");
     if (!(await loadAllPhotos(rows, "du fichier Excel"))) return;
+    // Toutes les photos d'un mal trié sur la même ligne : colonnes Photo 1, Photo 2, Photo 3
+    const head = [...HEAD.slice(0, -1), ...Array.from({ length: MAX_PHOTOS_MAL }, (_, n) => "Photo " + (n + 1))];
+    const first = HEAD.length - 1;
     const images = [], lines = [];
     for (let k = 0; k < rows.length; k++) {
-      const x = rows[k], cols = x.cols.slice();
-      cols[cols.length - 1] = "";                         // colonne Photo : l'image remplace "Oui"
-      if (x.i.photo) {
-        const im = await decodeImage(x.src);
+      const x = rows[k], cols = [...x.cols.slice(0, -1), ...Array(MAX_PHOTOS_MAL).fill("")];
+      for (let n = 0; n < nbItemPhotos(x.i); n++) {
+        const im = await decodeImage(x.srcs[n]);
         if (!im) { alert("Une photo est illisible : le fichier n'a pas été créé."); return; }
-        images.push(Object.assign(im, { row: k + 1, col: cols.length - 1 }));
+        images.push(Object.assign(im, { row: k + 1, col: first + n }));
       }
       lines.push(cols);
     }
-    download(XlsxWriter.build([HEAD, ...lines], "Mal triés", { images }), `mal-tries-${stamp()}.xlsx`);
+    download(XlsxWriter.build([head, ...lines], "Mal triés", { images }), `mal-tries-${stamp()}.xlsx`);
     toast(`Fichier Excel prêt${images.length ? ` : ${images.length} photo(s) insérée(s)` : ""}`);
   }
   async function exportPdf() {
@@ -957,7 +1028,7 @@
       <h1>Éléments mal triés — ${h(CFG.organisation)}</h1>
       <div class="sub">${h(crit)} · ${rows.length} élément(s) · édité le ${frDate(new Date())} par ${h(S.user)}</div>
       <table><thead><tr><th>Date</th><th>Agent</th><th>Magasin</th><th>Palier</th><th>Niveau</th><th>Déchet</th><th>Commentaire</th><th>Photo</th></tr></thead><tbody>
-      ${rows.map(({ r, i, d }) => `<tr><td>${frDate(d)} ${frTime(d).slice(0, 5)}</td><td>${h(r.agent)}</td><td>${h(r.magasin)}</td><td>${h(r.palier)}</td><td>${h(r.niveau)}</td><td>${h(i.dechet)}</td><td>${h(i.commentaire || "")}</td><td>${i.photo && safeImg((rows.find(x => x.i === i) || {}).src) ? `<img src="${safeImg(rows.find(x => x.i === i).src)}">` : ""}</td></tr>`).join("")}
+      ${rows.map(({ r, i, d }) => `<tr><td>${frDate(d)} ${frTime(d).slice(0, 5)}</td><td>${h(r.agent)}</td><td>${h(r.magasin)}</td><td>${h(r.palier)}</td><td>${h(r.niveau)}</td><td>${h(i.dechet)}</td><td>${h(i.commentaire || "")}</td><td>${((rows.find(x => x.i === i) || {}).srcs || []).filter(safeImg).map(src => `<img src="${src}">`).join(" ")}</td></tr>`).join("")}
       </tbody></table></body></html>`;
     const frame = document.createElement("iframe");
     frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
@@ -1131,7 +1202,7 @@
       .flatMap(r => r.items.filter(i => i.statut === "mal").map(i => ({ r, i })))
       .slice(0, 8);
     const noteList = baseRecords()
-      .filter(r => r.autre && r.magasin === mag.nom && r.palier === pal.nom && r.niveau === niv)
+      .filter(r => (r.autre || nbAutre(r)) && r.magasin === mag.nom && r.palier === pal.nom && r.niveau === niv)
       .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
 
     const optIdx = (arr, cur, lab) => arr.map((x, i) => `<option value="${i}" ${i === cur ? "selected" : ""}>${h(lab(x))}</option>`).join("");
@@ -1206,7 +1277,7 @@
         <div class="cats">${catRows}</div>
         ${noteList.length ? `<div class="mal-list">
           <div class="label" style="margin-bottom:6px">Dernières remarques « ${h(TEXTE || "Autre")} »</div>
-          ${noteList.map(r => `<div class="rec-line" style="padding:6px 0"><div class="cm" style="margin:0">📝 ${h(r.autre)}</div>
+          ${noteList.map(r => `<div class="rec-line" style="padding:6px 0"><div class="cm" style="margin:0">${r.autre ? "📝 " + h(r.autre) : ""}${autreThumbs(r)}</div>
             <small class="label" style="letter-spacing:0;white-space:nowrap">${h(r.agent)} · ${frDate(new Date(r.date))}</small></div>`).join("")}
         </div>` : ""}
         ${malList.length ? `<div class="mal-list">
@@ -1787,10 +1858,15 @@
         const dft = draftFor(current.mag.nom, current.pal.nom, current.niv);
         const d = el.dataset.d, s = el.dataset.s;
         if (dft[d] && dft[d].statut === s) delete dft[d];
-        else dft[d] = { ...(dft[d] || {}), statut: s };
+        else if (s === "mal") dft[d] = { ...(dft[d] || {}), statut: s };
+        else dft[d] = { statut: s };     // plus « Mal trié » : on retire ses photos et son commentaire
         saveDraft(); renderControle(); break;
       }
-      case "rmphoto": { const dft = draftFor(current.mag.nom, current.pal.nom, current.niv); delete dft[el.dataset.d].photo; saveDraft(); renderControle(); break; }
+      case "rmphoto": {
+        const v = draftFor(current.mag.nom, current.pal.nom, current.niv)[el.dataset.d];
+        v.photos = itemPhotosOf(v).filter((_, n) => n !== +el.dataset.n); delete v.photo;
+        saveDraft(); renderControle(); break;
+      }
       case "zoom": if (safeImg(el.getAttribute("src"))) modal(`<img src="${safeImg(el.getAttribute("src"))}" alt="Photo">`); break;
       case "reset": {
         const pref = current.mag.nom + "|" + current.pal.nom + "|";
@@ -1808,6 +1884,10 @@
         } else { S.records = store.get("records", []); route(); toast("Données actualisées"); }
         break;
       case "retry": flushOutbox(true); break;
+      case "rmnotephoto": {
+        const dft = draftFor(current.mag.nom, current.pal.nom, current.niv);
+        dft.__photos = notePhotosOf(dft).filter((_, n) => n !== +el.dataset.n); saveDraft(); renderControle(); break;
+      }
       case "chpw": location.hash = "#/mot-de-passe"; break;
       case "period": {
         const p = el.dataset.p === S.hist.period ? "" : el.dataset.p;
@@ -1856,14 +1936,15 @@
       case "size": S.hist.size = +el.dataset.s; S.hist.page = 0; renderHistResults(); break;
       case "page": S.hist.page += +el.dataset.d; renderHistResults(); window.scrollTo({ top: 0, behavior: "smooth" }); break;
       case "showphoto": if (ONLINE) {
-        const r = S.records.find(x => x.id === el.dataset.id), it = r && r.items.find(i => i.dechet === el.dataset.d);
+        const r = S.records.find(x => x.id === el.dataset.id) || {}, it = (r.items || []).find(i => i.dechet === el.dataset.d || el.dataset.d.startsWith(i.dechet + "#")) || { dechet: el.dataset.d.replace(/^Autre#/, (TEXTE || "Autre") + " · photo ") };
         getPhoto(el.dataset.id, el.dataset.d).then(src => safeImg(src) && modal(`<img src="${safeImg(src)}" alt="Photo"><p class="label mt">${h(r.niveau)} · ${h(it.dechet)}${it.commentaire ? " · " + h(it.commentaire) : ""}</p>`))
           .catch(e => toast(errMsg(e)));
         break;
       } else {
         const r = S.records.find(x => x.id === el.dataset.id);
-        const it = r && r.items.find(i => i.dechet === el.dataset.d);
-        if (it && safeImg(it.photo)) modal(`<img src="${safeImg(it.photo)}" alt="Photo"><p class="label mt">${h(r.niveau)} · ${h(it.dechet)}${it.commentaire ? " · " + h(it.commentaire) : ""}</p>`);
+        const it = r && (r.items.find(i => i.dechet === el.dataset.d || el.dataset.d.startsWith(i.dechet + "#")) || { dechet: el.dataset.d });
+        const lsrc = r ? safeImg(photoCache[r.id + "|" + el.dataset.d] || "") : "";
+        getPhoto(el.dataset.id, el.dataset.d).then(src => { src = safeImg(src) || lsrc; if (src) modal(`<img src="${src}" alt="Photo"><p class="label mt">${h(r.niveau)} · ${h(it.dechet)}${it.commentaire ? " · " + h(it.commentaire) : ""}</p>`); });
         break;
       }
       case "csv": exportCsv(); break;
