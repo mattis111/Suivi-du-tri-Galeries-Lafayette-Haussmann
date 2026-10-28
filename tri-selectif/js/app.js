@@ -73,6 +73,7 @@
   const newSalt = () => [...crypto.getRandomValues(new Uint8Array(8))].map(b => b.toString(16).padStart(2, "0")).join("");
   function openSession(acc) {
     S.user = acc.nom || acc.identifiant; S.role = acc.role; S.ident = acc.identifiant; S.jeton = acc.jeton || null;
+    S.doitChanger = !!acc.doit_changer;
   }
 
   /* ---------------- Base de données en ligne (Supabase) ---------------- */
@@ -82,7 +83,14 @@
     IDENTIFIANTS_INVALIDES: "Identifiant ou mot de passe incorrect.",
     SESSION_EXPIREE: "Ta session a expiré : reconnecte-toi.",
     NON_AUTORISE: "Action non autorisée pour ton compte.",
-    MOT_DE_PASSE_TROP_COURT: "Mot de passe : 6 caractères minimum.",
+    MOT_DE_PASSE_TROP_COURT: "Mot de passe : 8 caractères minimum.",
+    MOT_DE_PASSE_TROP_LONG: "Mot de passe : 72 caractères maximum.",
+    MOT_DE_PASSE_TROP_SIMPLE: "Mot de passe trop simple : mets au moins une lettre et un chiffre, et pas ton identifiant.",
+    MOT_DE_PASSE_IDENTIQUE: "Le nouveau mot de passe doit être différent de l'ancien.",
+    ANCIEN_MOT_DE_PASSE_FAUX: "Mot de passe incorrect.",
+    MOT_DE_PASSE_A_CHANGER: "Tu dois d'abord choisir un nouveau mot de passe.",
+    COMPTE_BLOQUE: "Trop d'essais : ce compte est bloqué 15 minutes. Réessaie plus tard ou demande à l'administrateur.",
+    DONNEES_INVALIDES: "Données refusées par le serveur (format invalide).",
     MOT_DE_PASSE_OBLIGATOIRE: "Le mot de passe est obligatoire pour un nouveau compte.",
     DERNIER_ADMIN: "Il faut garder au moins un administrateur.",
     SUPPRESSION_DE_SOI: "Tu ne peux pas supprimer ton propre compte.",
@@ -110,11 +118,12 @@
     try { return await api(fn, Object.assign({ p_jeton: S.jeton }, params || {})); }
     catch (e) {
       if (e.message === "SESSION_EXPIREE") { closeSession(); toast(ERREURS.SESSION_EXPIREE); route(); }
+      if (e.message === "MOT_DE_PASSE_A_CHANGER") { S.doitChanger = true; route(); }
       throw e;
     }
   }
   function closeSession() {
-    S.user = S.role = S.ident = S.jeton = null;
+    S.user = S.role = S.ident = S.jeton = null; S.doitChanger = false;
     store.del("session"); store.del("cache"); store.del("syncAt");
     S.records = ONLINE ? [] : store.get("records", []);
     photoCache = {};
@@ -137,6 +146,21 @@
 
   /* ---------------- Utilitaires ---------------- */
   const h = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // Sécurité : seules de vraies images (data URL JPEG/PNG en base64) peuvent être affichées.
+  const safeImg = src => (typeof src === "string" && /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$/.test(src) ? src : "");
+  const statutOk = st => Object.prototype.hasOwnProperty.call(STATUTS, st);
+  // Nettoie un contrôle reçu du serveur (types attendus, statuts connus uniquement).
+  function cleanRecord(r) {
+    const str = v => (typeof v === "string" ? v : v == null ? "" : String(v));
+    return {
+      id: str(r.id), date: str(r.date), agent: str(r.agent), compte: str(r.compte),
+      magasin: str(r.magasin), palier: str(r.palier), niveau: str(r.niveau), recu: r.recu,
+      autre: r.autre ? str(r.autre) : undefined,
+      items: (Array.isArray(r.items) ? r.items : []).filter(i => i && statutOk(i.statut)).map(i => ({
+        dechet: str(i.dechet), statut: i.statut, commentaire: i.commentaire ? str(i.commentaire) : undefined, photo: i.photo ? true : undefined
+      }))
+    };
+  }
   const pad = n => String(n).padStart(2, "0");
   const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const frDate = d => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
@@ -160,6 +184,27 @@
   }
   document.getElementById("modal-close").onclick = () => (document.getElementById("modal").hidden = true);
   document.getElementById("modal").onclick = e => { if (e.target.id === "modal") e.target.hidden = true; };
+
+  // Écran de chargement (bloque l'appli tant qu'un envoi ou un export n'est pas terminé).
+  function showLoading(title, sub) {
+    let el = document.getElementById("loading");
+    if (!el) {
+      el = document.createElement("div"); el.id = "loading"; el.className = "loading";
+      el.innerHTML = `<div class="loading-box"><div class="spinner"></div><b class="loading-title"></b><div class="loading-sub"></div>
+        <div class="loading-bar"><span></span></div><small>Ne ferme pas l'appli pendant le chargement.</small></div>`;
+      document.body.appendChild(el);
+    }
+    el.querySelector(".loading-title").textContent = title;
+    el.querySelector(".loading-sub").textContent = sub || "";
+    el.querySelector(".loading-bar span").style.width = "0%";
+    el.hidden = false;
+  }
+  function updateLoading(done, total, sub) {
+    const el = document.getElementById("loading"); if (!el) return;
+    el.querySelector(".loading-bar span").style.width = (total ? Math.round(done / total * 100) : 0) + "%";
+    if (sub) el.querySelector(".loading-sub").textContent = sub;
+  }
+  function hideLoading() { const el = document.getElementById("loading"); if (el) el.hidden = true; }
 
   function download(blob, filename) {
     const a = document.createElement("a");
@@ -198,7 +243,10 @@
   /* ---------------- Routage ---------------- */
   function route() {
     const r = location.hash.replace(/^#\/?/, "");
+    const foot = document.getElementById("foot-links");
+    if (foot) foot.innerHTML = S.user && ONLINE && !S.doitChanger ? `<button class="linkbtn" data-act="chpw">🔑 Changer mon mot de passe</button>` : "";
     if (!S.user) return renderLogin();
+    if (S.doitChanger || r === "mot-de-passe") return renderChangePassword(S.doitChanger);
     if (r.startsWith("suivi") && can("suivi")) {
       const tab = r.includes("supervision") && can("supervision") ? "supervision" : r.includes("analyse") ? "analyse" : r.includes("tableau") ? "dashboard"
         : r.includes("comptes") && can("comptes") ? "comptes" : "historique";
@@ -208,6 +256,45 @@
     renderControle();
   }
   window.addEventListener("hashchange", route);
+
+  /* ---------------- Changement de mot de passe ---------------- */
+  function renderChangePassword(force) {
+    header("Sécurité", "Mot de passe", force ? userBox() : `<button class="hbtn" data-act="go" data-to="#/controle">← Retour</button>${userBox()}`);
+    $app.className = "";
+    $app.innerHTML = `
+      <form class="card login" id="pw-form" autocomplete="on">
+        <div class="label">${h(S.user)} · ${h(ROLES[S.role] ? ROLES[S.role].label : "")}</div>
+        <h2>${force ? "Choisis ton mot de passe" : "Changer mon mot de passe"}</h2>
+        ${force ? `<p style="margin-top:-6px">Pour ta sécurité, remplace le mot de passe provisoire par un mot de passe personnel, connu de toi seul.</p>` : ""}
+        <input type="text" name="username" value="${h(S.ident)}" autocomplete="username" hidden>
+        <label class="label" for="pw-old">Mot de passe actuel</label>
+        <input id="pw-old" type="password" autocomplete="current-password" required maxlength="200">
+        <label class="label" for="pw-new">Nouveau mot de passe</label>
+        <input id="pw-new" type="password" autocomplete="new-password" required minlength="8" maxlength="72">
+        <label class="label" for="pw-new2">Confirme le nouveau mot de passe</label>
+        <input id="pw-new2" type="password" autocomplete="new-password" required minlength="8" maxlength="72">
+        <p>Au moins 8 caractères, avec au moins une lettre et un chiffre.</p>
+        <div class="login-err" id="pw-err" hidden></div>
+        <button class="btn-dark" type="submit">Enregistrer</button>
+        ${force ? `<p style="text-align:center"><button type="button" class="linkbtn" data-act="logout">Se déconnecter</button></p>` : ""}
+      </form>`;
+    const err = m => { const e = document.getElementById("pw-err"); e.textContent = m; e.hidden = !m; };
+    document.getElementById("pw-form").onsubmit = async e => {
+      e.preventDefault();
+      const old = document.getElementById("pw-old").value, nw = document.getElementById("pw-new").value, nw2 = document.getElementById("pw-new2").value;
+      if (nw !== nw2) return err("Les deux nouveaux mots de passe ne sont pas identiques.");
+      if (nw.length < 8 || !/[A-Za-z]/.test(nw) || !/[0-9]/.test(nw)) return err(ERREURS.MOT_DE_PASSE_TROP_SIMPLE);
+      const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+      try {
+        await call("tri_changer_mot_de_passe", { p_ancien: old, p_nouveau: nw });
+        S.doitChanger = false;
+        const sess = store.get("session", {}); sess.doit_changer = false; store.set("session", sess);
+        toast("✓ Mot de passe enregistré. Tes autres appareils ont été déconnectés.");
+        location.hash = "#/controle"; route();
+        syncAll(true);
+      } catch (ex) { err(errMsg(ex)); btn.disabled = false; }
+    };
+  }
 
   /* ---------------- Connexion ---------------- */
   function renderLogin() {
@@ -232,12 +319,13 @@
       if (ONLINE) {
         try {
           const acc = await api("tri_connexion", { p_identifiant: id, p_mot_de_passe: pw });
+          if (!acc || acc.erreur || !acc.jeton) throw new Error((acc && acc.erreur) || "IDENTIFIANTS_INVALIDES");
           openSession(acc);
           store.set("session", acc);
           S.records = [];
           location.hash = "#/controle";
           route();
-          syncAll(true);
+          if (!S.doitChanger) syncAll(true);
         } catch (ex) {
           err(errMsg(ex));
           if (ex.message === "IDENTIFIANTS_INVALIDES") document.getElementById("login-pw").value = "";
@@ -335,9 +423,9 @@
         `<button class="choice ${k} ${v.statut === k ? "on" : ""}" data-act="set" data-d="${h(d)}" data-s="${k}"><i>${s.icon}</i>${s.label}</button>`).join("");
       const extra = v.statut === "mal" ? `
         <div class="mal-extra">
-          <input type="text" placeholder="Commentaire (ex. carton non plié)" value="${h(v.commentaire || "")}" data-act="comment" data-d="${h(d)}">
+          <input type="text" maxlength="300" placeholder="Commentaire (ex. carton non plié)" value="${h(v.commentaire || "")}" data-act="comment" data-d="${h(d)}">
           <div class="photo-row">
-            ${v.photo ? `<img src="${v.photo}" alt="Photo" data-act="zoom">` : ""}
+            ${safeImg(v.photo) ? `<img src="${safeImg(v.photo)}" alt="Photo" data-act="zoom">` : ""}
             <label class="photo-btn">📷 ${v.photo ? "Changer la photo" : "Ajouter une photo"}
               <input type="file" accept="image/*" capture="environment" hidden data-act="photo" data-d="${h(d)}">
             </label>
@@ -363,10 +451,10 @@
         ${items}
         ${TEXTE ? `<div class="item note-item">
           <label class="item-name" for="note-field">${h(TEXTE)}</label>
-          <textarea id="note-field" rows="2" placeholder="Remarque libre pour ${h(niv)} (facultatif)">${h((values.__note) || "")}</textarea>
+          <textarea id="note-field" rows="2" maxlength="1000" placeholder="Remarque libre pour ${h(niv)} (facultatif)">${h((values.__note) || "")}</textarea>
         </div>` : ""}
         <div class="send-wrap">
-          <div class="pending" id="pending" ${ONLINE && myOutbox().length ? "" : "hidden"}>⏳ <b>${ONLINE ? myOutbox().length : 0}</b> niveau(x) en attente d'envoi (pas de réseau) <button class="linkbtn" data-act="retry">Réessayer</button></div>
+          <div class="pending" id="pending" ${ONLINE && myOutbox().length && !envoiEnCours ? "" : "hidden"}>⏳ <b>${ONLINE ? myOutbox().length : 0}</b> niveau(x) en attente d'envoi (pas de réseau) <button class="linkbtn" data-act="retry">Réessayer</button></div>
           <button class="btn-dark" data-act="send" ${draftCount ? "" : "disabled"}>🚀 TOUT envoyer${draftCount ? ` (${draftCount} niveau${draftCount > 1 ? "x" : ""})` : ""}</button>
         </div>
       </section>`;
@@ -435,8 +523,8 @@
       if (!saveOutbox()) { S.outbox.splice(S.outbox.length - keys.length); return; }
       S.draft = {}; saveDraft();
       addPendingToRecords();
+      envoiEnCours = true;
       renderControle();
-      toast(`⏳ Envoi de ${nb}…`);
       flushOutbox(true);
       return;
     }
@@ -464,36 +552,65 @@
     sortRecords();
   }
 
-  let flushing = false;
-  async function flushOutbox(fromSend) {
-    if (!ONLINE || !S.jeton || flushing) return;
+  let flushing = null, envoiEnCours = false;   // envoiEnCours : écran de chargement affiché
+  // Envoie les contrôles en attente. Avec "visible" : écran de chargement jusqu'à la confirmation du serveur.
+  async function flushOutbox(visible) {
+    const stop = () => { if (visible) { envoiEnCours = false; refreshPending(); } };
+    if (!ONLINE || !S.jeton) return stop();
+    if (flushing) { if (visible) showLoading("Envoi en cours…", ""); await flushing.catch(() => {}); if (visible) hideLoading(); }
     const mine = myOutbox();
-    if (!mine.length) return;
-    flushing = true;
-    let sent = 0;
-    try {
-      for (let i = 0; i < mine.length; i += 8) {          // par paquets (les photos peuvent être lourdes)
-        const batch = mine.slice(i, i + 8).map(r => { const c = Object.assign({}, r); delete c._compte; return c; });
-        await call("tri_envoyer", { p_controles: batch });
-        const ids = new Set(batch.map(r => r.id));
-        S.outbox = S.outbox.filter(r => !ids.has(r.id)); saveOutbox();
-        S.records.forEach(r => { if (ids.has(r.id)) delete r._attente; });
-        sent += batch.length;
+    if (!mine.length) return stop();
+    const total = mine.length, photos = mine.reduce((n, r) => n + r.items.filter(i => typeof i.photo === "string").length, 0);
+    const label = n => `${n}/${total} niveau${total > 1 ? "x" : ""}${photos ? ` · ${photos} photo${photos > 1 ? "s" : ""}` : ""}`;
+    if (visible) { envoiEnCours = true; showLoading("Envoi en cours…", label(0)); }
+    flushing = (async () => {
+      let sent = 0;
+      try {
+        // Paquets d'au plus 8 niveaux et ~1,5 Mo (les photos sont lourdes)
+        const batches = []; let cur = [], size = 0;
+        mine.forEach(r => {
+          const c = Object.assign({}, r); delete c._compte;
+          const sz = JSON.stringify(c).length;
+          if (cur.length && (cur.length >= 8 || size + sz > 1500000)) { batches.push(cur); cur = []; size = 0; }
+          cur.push(c); size += sz;
+        });
+        if (cur.length) batches.push(cur);
+        for (const batch of batches) {
+          try { await call("tri_envoyer", { p_controles: batch }); }
+          catch (e) {
+            if (e.message !== "DONNEES_INVALIDES") throw e;
+            // un niveau refusé ne doit pas bloquer les autres : on renvoie un par un et on écarte les refusés
+            for (const one of batch) {
+              try { await call("tri_envoyer", { p_controles: [one] }); }
+              catch (e2) {
+                if (e2.message !== "DONNEES_INVALIDES") throw e2;
+                const rejet = store.get("rejetes", []); rejet.push(one); store.set("rejetes", rejet.slice(-20), true);
+                S.records = S.records.filter(r => r.id !== one.id);
+                alert(`Le niveau « ${one.palier} — ${one.niveau} » a été refusé par le serveur (données invalides ou trop anciennes) et n'a pas été enregistré.`);
+              }
+            }
+          }
+          const ids = new Set(batch.map(r => r.id));
+          S.outbox = S.outbox.filter(r => !ids.has(r.id)); saveOutbox();
+          S.records.forEach(r => { if (ids.has(r.id)) delete r._attente; });
+          sent += batch.length;
+          if (visible) updateLoading(sent, total, label(sent));
+        }
+        saveRecords();
+        if (visible) hideLoading();
+        toast(`✓ ${sent} niveau${sent > 1 ? "x" : ""} envoyé${sent > 1 ? "s" : ""}${photos ? ` avec ${photos} photo${photos > 1 ? "s" : ""}` : ""} à ${frTime(new Date()).slice(0, 5)} — la saisie est vide, prête pour le prochain passage`);
+      } catch (e) {
+        if (visible) hideLoading();
+        if (e.reseau) {
+          if (visible) alert(`📶 Pas de réseau : l'envoi n'a pas pu se terminer.\n\n${myOutbox().length} niveau(x) sont gardés sur l'appareil (rien n'est perdu) et partiront automatiquement dès le retour du réseau.`);
+        } else if (e.message !== "SESSION_EXPIREE") toast(errMsg(e));
       }
-      saveRecords();
-      toast(`✓ ${sent} niveau${sent > 1 ? "x" : ""} envoyé${sent > 1 ? "s" : ""} à ${frTime(new Date()).slice(0, 5)} — la saisie est vide, prête pour le prochain passage`);
-    } catch (e) {
-      if (e.reseau) {
-        if (fromSend) toast(`📶 Pas de réseau : ${myOutbox().length} niveau(x) gardé(s) sur l'appareil. Envoi automatique dès le retour du réseau.`);
-      } else if (e.message !== "SESSION_EXPIREE") toast(errMsg(e));
-    } finally {
-      flushing = false;
-      refreshPending();
-    }
+    })();
+    try { await flushing; } finally { flushing = null; if (visible) envoiEnCours = false; refreshPending(); }
   }
   function refreshPending() {
     const n = myOutbox().length, el = document.getElementById("pending");
-    if (el) { el.hidden = !n; el.querySelector("b").textContent = n; }
+    if (el) { el.hidden = !n || envoiEnCours; el.querySelector("b").textContent = n; }
     if (location.hash.indexOf("suivi") < 0 && !(document.activeElement && document.activeElement.matches("input, textarea"))) {
       const tiles = document.getElementById("floors");
       if (tiles && S.user) renderControle();
@@ -507,7 +624,8 @@
     if (syncing) return syncing;
     syncing = (async () => {
       const since = full ? null : store.get("syncAt", null);
-      const list = await call("tri_controles", { p_depuis: since });
+      let list = await call("tri_controles", { p_depuis: since });
+      list = (Array.isArray(list) ? list : []).map(cleanRecord).filter(r => !isNaN(new Date(r.date)));
       list.forEach(r => { r.date = new Date(r.date).toISOString(); });   // même format de date partout (tri fiable)
       let changed = full;
       if (full) S.records = list;
@@ -661,11 +779,11 @@
   }
 
   // Miniature de la photo d'un mal trié ; un clic l'ouvre en grand.
-  const photoSrc = (r, i) => (typeof i.photo === "string" ? i.photo : photoCache[r.id + "|" + i.dechet] || "");
+  const photoSrc = (r, i) => safeImg(typeof i.photo === "string" ? i.photo : photoCache[r.id + "|" + i.dechet] || "");
   const photoThumb = (r, i) => {
     if (!i.photo) return "";
     const src = photoSrc(r, i);
-    return `<button class="thumb" data-act="showphoto" data-id="${r.id}" data-d="${h(i.dechet)}" title="Agrandir la photo"><img ${src ? `src="${src}"` : `data-ph="${h(r.id + "|" + i.dechet)}"`} alt="Photo ${h(i.dechet)}"><span>🔍 Agrandir</span></button>`;
+    return `<button class="thumb" data-act="showphoto" data-id="${h(r.id)}" data-d="${h(i.dechet)}" title="Agrandir la photo"><img ${safeImg(src) ? `src="${safeImg(src)}"` : `data-ph="${h(r.id + "|" + i.dechet)}"`} alt="Photo ${h(i.dechet)}"><span>🔍 Agrandir</span></button>`;
   };
   // Charge une photo depuis le serveur (en ligne) et la garde en mémoire.
   async function getPhoto(id, dechet) {
@@ -689,7 +807,7 @@
       while ((imgs = [...document.querySelectorAll("img[data-ph]:not([data-loading])")]).length) {
         const el = imgs[0]; el.setAttribute("data-loading", "1");
         const k = el.getAttribute("data-ph"), cut = k.indexOf("|");
-        try { const src = await getPhoto(k.slice(0, cut), k.slice(cut + 1)); if (src) { el.src = src; el.removeAttribute("data-ph"); } else el.alt = "Photo indisponible"; }
+        try { const src = safeImg(await getPhoto(k.slice(0, cut), k.slice(cut + 1))); if (src) { el.src = src; el.removeAttribute("data-ph"); } else el.alt = "Photo indisponible"; }
         catch (e) { el.alt = "Photo indisponible hors réseau"; }
       }
     } finally { hydrating = false; }
@@ -716,7 +834,7 @@
           <div>${h(i.dechet)}${i.commentaire ? `<div class="cm">💬 ${h(i.commentaire)}</div>` : ""}${photoThumb(r, i)}</div>
           <div class="row" style="flex-wrap:nowrap">
             
-            <span class="tag ${i.statut}">${STATUTS[i.statut].label}</span>
+            <span class="tag ${statutOk(i.statut) ? i.statut : ""}">${h(statutOk(i.statut) ? STATUTS[i.statut].label : "?")}</span>
           </div></div>`).join("")}
         ${r.autre ? `<div class="rec-line note-line"><div>${h(TEXTE || "Autre")}</div><div class="note-text">${h(r.autre)}</div></div>` : ""}
       </section>`;
@@ -766,19 +884,64 @@
     const csv = [HEAD, ...rows.map(x => x.cols)].map(r => r.map(q).join(";")).join("\r\n");
     download(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }), `controles-tri-${stamp()}.csv`);
   }
-  function exportXlsx() {
+  // Lit une image (data URL) : octets + dimensions, pour l'insérer dans Excel.
+  function decodeImage(src) {
+    return new Promise(resolve => {
+      const m = /^data:image\/(jpeg|jpg|png);base64,(.*)$/.exec(src || "");
+      if (!m) return resolve(null);
+      const bin = atob(m[2]), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const img = new Image();
+      img.onload = () => resolve({ bytes, w: img.naturalWidth, h: img.naturalHeight, ext: m[1] === "png" ? "png" : "jpeg" });
+      img.onerror = () => resolve(null);
+      img.src = src;
+    });
+  }
+  // Charge TOUTES les photos d'un export (avec écran de chargement et nouveaux essais).
+  // Renvoie false si une photo reste introuvable : l'export est alors annulé plutôt qu'incomplet.
+  async function loadAllPhotos(rows, what) {
+    const need = rows.filter(x => x.i.photo);
+    if (!need.length) return true;
+    showLoading(`Préparation ${what}…`, `Chargement des photos 0/${need.length}`);
+    let done = 0, failed = 0;
+    const one = async x => {
+      for (let essai = 0; essai < 3 && !x.src; essai++) {
+        try { x.src = safeImg(await getPhoto(x.r.id, x.i.dechet)); } catch (e) { await new Promise(r => setTimeout(r, 800 * (essai + 1))); }
+      }
+      if (!x.src) failed++;
+      done++; updateLoading(done, need.length, `Chargement des photos ${done}/${need.length}`);
+    };
+    const queue = need.slice();
+    await Promise.all([1, 2, 3, 4].map(async () => { while (queue.length) await one(queue.shift()); }));
+    hideLoading();
+    if (failed) {
+      alert(`${failed} photo(s) n'ont pas pu être chargées (réseau ?).\nLe fichier n'a pas été créé pour ne pas le livrer sans ses photos. Réessaie dans un instant.`);
+      return false;
+    }
+    return true;
+  }
+  async function exportXlsx() {
     const rows = exportRows(true);
     if (!rows.length) return toast("Aucun élément mal trié pour ces critères.");
-    download(XlsxWriter.build([HEAD, ...rows.map(x => x.cols)], "Mal triés"), `mal-tries-${stamp()}.xlsx`);
+    if (!(await loadAllPhotos(rows, "du fichier Excel"))) return;
+    const images = [], lines = [];
+    for (let k = 0; k < rows.length; k++) {
+      const x = rows[k], cols = x.cols.slice();
+      cols[cols.length - 1] = "";                         // colonne Photo : l'image remplace "Oui"
+      if (x.i.photo) {
+        const im = await decodeImage(x.src);
+        if (!im) { alert("Une photo est illisible : le fichier n'a pas été créé."); return; }
+        images.push(Object.assign(im, { row: k + 1, col: cols.length - 1 }));
+      }
+      lines.push(cols);
+    }
+    download(XlsxWriter.build([HEAD, ...lines], "Mal triés", { images }), `mal-tries-${stamp()}.xlsx`);
+    toast(`Fichier Excel prêt${images.length ? ` : ${images.length} photo(s) insérée(s)` : ""}`);
   }
   async function exportPdf() {
     const rows = exportRows(true);
     if (!rows.length) return toast("Aucun élément mal trié pour ces critères.");
-    const withPhoto = rows.filter(x => x.i.photo);
-    if (withPhoto.length) {
-      toast(`Préparation du PDF (${withPhoto.length} photo(s))…`);
-      for (const x of withPhoto) { try { x.src = await getPhoto(x.r.id, x.i.dechet); } catch (e) { x.src = ""; } }
-    }
+    if (!(await loadAllPhotos(rows, "du PDF"))) return;
     const F = S.hist;
     const crit = [F.du && "du " + F.du.split("-").reverse().join("/"), F.au && "au " + F.au.split("-").reverse().join("/"),
       F.mag, F.pal, F.niv, F.agent].filter(Boolean).join(" · ") || "Toutes périodes";
@@ -794,7 +957,7 @@
       <h1>Éléments mal triés — ${h(CFG.organisation)}</h1>
       <div class="sub">${h(crit)} · ${rows.length} élément(s) · édité le ${frDate(new Date())} par ${h(S.user)}</div>
       <table><thead><tr><th>Date</th><th>Agent</th><th>Magasin</th><th>Palier</th><th>Niveau</th><th>Déchet</th><th>Commentaire</th><th>Photo</th></tr></thead><tbody>
-      ${rows.map(({ r, i, d }) => `<tr><td>${frDate(d)} ${frTime(d).slice(0, 5)}</td><td>${h(r.agent)}</td><td>${h(r.magasin)}</td><td>${h(r.palier)}</td><td>${h(r.niveau)}</td><td>${h(i.dechet)}</td><td>${h(i.commentaire || "")}</td><td>${i.photo && (rows.find(x => x.i === i) || {}).src ? `<img src="${rows.find(x => x.i === i).src}">` : ""}</td></tr>`).join("")}
+      ${rows.map(({ r, i, d }) => `<tr><td>${frDate(d)} ${frTime(d).slice(0, 5)}</td><td>${h(r.agent)}</td><td>${h(r.magasin)}</td><td>${h(r.palier)}</td><td>${h(r.niveau)}</td><td>${h(i.dechet)}</td><td>${h(i.commentaire || "")}</td><td>${i.photo && safeImg((rows.find(x => x.i === i) || {}).src) ? `<img src="${safeImg(rows.find(x => x.i === i).src)}">` : ""}</td></tr>`).join("")}
       </tbody></table></body></html>`;
     const frame = document.createElement("iframe");
     frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
@@ -1391,7 +1554,7 @@
           <thead><tr><th>Identifiant</th><th>Nom affiché</th><th>Rôle</th><th></th></tr></thead>
           <tbody>${onlineAccounts.map(a => `<tr>
             <th>${h(a.identifiant)}${a.identifiant === S.ident ? ` <span class="label">(toi)</span>` : ""}</th>
-            <td>${h(a.nom)}</td><td><span class="role-tag ${a.role}">${h(ROLES[a.role] ? ROLES[a.role].label : a.role)}</span></td>
+            <td>${h(a.nom)}${a.doit_changer ? ` <span class="label" title="Mot de passe provisoire pas encore changé">· provisoire</span>` : ""}</td><td><span class="role-tag ${ROLES[a.role] ? a.role : ""}">${h(ROLES[a.role] ? ROLES[a.role].label : a.role)}</span></td>
             <td style="white-space:nowrap"><button class="linkbtn" data-act="oaccedit" data-id="${h(a.identifiant)}">Modifier</button>
               ${a.identifiant === S.ident ? "" : `· <button class="linkbtn danger" data-act="oaccdel" data-id="${h(a.identifiant)}">Supprimer</button>`}</td>
           </tr>`).join("")}</tbody>
@@ -1403,19 +1566,21 @@
           <label>Identifiant<input id="acc-id" required value="${ed ? h(ed.identifiant) : ""}" ${ed ? "readonly" : ""} autocapitalize="none" placeholder="ex. samir"></label>
           <label>Nom affiché<input id="acc-nom" required value="${ed ? h(ed.nom) : ""}" placeholder="ex. Samir"></label>
           <label>Rôle<select id="acc-role">${roleOpt(ed ? ed.role : "agent")}</select></label>
-          <label>Mot de passe<input id="acc-pw" type="password" autocomplete="new-password" ${ed ? `placeholder="laisser vide = inchangé"` : "required"} minlength="6"></label>
+          <label>Mot de passe provisoire<input id="acc-pw" type="password" autocomplete="new-password" ${ed ? `placeholder="laisser vide = inchangé"` : "required"} minlength="8" maxlength="72"></label>
         </div>
         <div class="row mt">
           <button class="btn-dark" type="submit" style="width:auto;padding:9px 16px">${ed ? "Enregistrer" : "Ajouter le compte"}</button>
           ${ed ? `<button class="btn" type="button" data-act="oacccancel">Annuler</button>` : ""}
         </div>
-        <p class="hint">Les changements sont actifs immédiatement, sur tous les appareils. Changer le mot de passe d'un compte le déconnecte de ses autres appareils.<br>
+        <p class="hint">Les changements sont actifs immédiatement, sur tous les appareils. Le mot de passe donné ici est <b>provisoire</b> : la personne devra choisir le sien à sa connexion (8 caractères minimum, lettres et chiffres). Le changer déconnecte ses appareils et débloque le compte s'il était bloqué.<br>
         Agent : saisie des contrôles uniquement · Superviseur : paliers + consultation et export des données · Responsable : tout sauf l'effacement des données et les comptes · Administrateur : tout.</p>
       </form>`;
     document.getElementById("acc-form").onsubmit = async e => {
       e.preventDefault();
       const id = document.getElementById("acc-id").value.trim().toLowerCase();
       if (!/^[a-z0-9._-]{2,40}$/.test(id)) return toast("Identifiant : lettres sans accent, chiffres, point, tiret (2 à 40 caractères).");
+      const pwv = document.getElementById("acc-pw").value;
+      if (pwv && (pwv.length < 8 || !/[A-Za-z]/.test(pwv) || !/[0-9]/.test(pwv))) return toast(ERREURS.MOT_DE_PASSE_TROP_SIMPLE);
       const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
       try {
         await call("tri_compte_enregistrer", { p_identifiant: id, p_nom: document.getElementById("acc-nom").value,
@@ -1442,7 +1607,7 @@
           <thead><tr><th>Identifiant</th><th>Nom affiché</th><th>Rôle</th><th></th></tr></thead>
           <tbody>${draftAccounts.map(a => `<tr>
             <th>${h(a.identifiant)}${a.identifiant === S.ident ? ` <span class="label">(toi)</span>` : ""}</th>
-            <td>${h(a.nom)}</td><td><span class="role-tag ${a.role}">${h(ROLES[a.role] ? ROLES[a.role].label : a.role)}</span></td>
+            <td>${h(a.nom)}</td><td><span class="role-tag ${ROLES[a.role] ? a.role : ""}">${h(ROLES[a.role] ? ROLES[a.role].label : a.role)}</span></td>
             <td style="white-space:nowrap"><button class="linkbtn" data-act="accedit" data-id="${h(a.identifiant)}">Modifier</button>
               · <button class="linkbtn danger" data-act="accdel" data-id="${h(a.identifiant)}">Supprimer</button></td>
           </tr>`).join("")}</tbody>
@@ -1606,7 +1771,7 @@
     const el = e.target.closest("[data-act]");
     if (!el || el.tagName === "INPUT") return;
     const a = el.dataset.act;
-    const NEED = { csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
+    const NEED = { chpw: "controle", csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
     if (NEED[a] && !can(NEED[a])) { toast("Action non autorisée pour ton compte."); return; }
     switch (a) {
       case "go": location.hash = el.dataset.to; break;
@@ -1626,7 +1791,7 @@
         saveDraft(); renderControle(); break;
       }
       case "rmphoto": { const dft = draftFor(current.mag.nom, current.pal.nom, current.niv); delete dft[el.dataset.d].photo; saveDraft(); renderControle(); break; }
-      case "zoom": modal(`<img src="${el.getAttribute("src")}" alt="Photo">`); break;
+      case "zoom": if (safeImg(el.getAttribute("src"))) modal(`<img src="${safeImg(el.getAttribute("src"))}" alt="Photo">`); break;
       case "reset": {
         const pref = current.mag.nom + "|" + current.pal.nom + "|";
         const ks = Object.keys(S.draft).filter(k => k.startsWith(pref));
@@ -1642,7 +1807,8 @@
             .catch(e => toast(e.reseau ? "📶 Pas de réseau : affichage de la dernière copie enregistrée." : errMsg(e)));
         } else { S.records = store.get("records", []); route(); toast("Données actualisées"); }
         break;
-      case "retry": toast("Nouvel essai d'envoi…"); flushOutbox(true); break;
+      case "retry": flushOutbox(true); break;
+      case "chpw": location.hash = "#/mot-de-passe"; break;
       case "period": {
         const p = el.dataset.p === S.hist.period ? "" : el.dataset.p;
         S.hist.period = p; [S.hist.du, S.hist.au] = periodRange(p); S.hist.page = 0;
@@ -1691,13 +1857,13 @@
       case "page": S.hist.page += +el.dataset.d; renderHistResults(); window.scrollTo({ top: 0, behavior: "smooth" }); break;
       case "showphoto": if (ONLINE) {
         const r = S.records.find(x => x.id === el.dataset.id), it = r && r.items.find(i => i.dechet === el.dataset.d);
-        getPhoto(el.dataset.id, el.dataset.d).then(src => src && modal(`<img src="${src}" alt="Photo"><p class="label mt">${h(r.niveau)} · ${h(it.dechet)}${it.commentaire ? " · " + h(it.commentaire) : ""}</p>`))
+        getPhoto(el.dataset.id, el.dataset.d).then(src => safeImg(src) && modal(`<img src="${safeImg(src)}" alt="Photo"><p class="label mt">${h(r.niveau)} · ${h(it.dechet)}${it.commentaire ? " · " + h(it.commentaire) : ""}</p>`))
           .catch(e => toast(errMsg(e)));
         break;
       } else {
         const r = S.records.find(x => x.id === el.dataset.id);
         const it = r && r.items.find(i => i.dechet === el.dataset.d);
-        if (it && it.photo) modal(`<img src="${it.photo}" alt="Photo"><p class="label mt">${h(r.niveau)} · ${h(it.dechet)}${it.commentaire ? " · " + h(it.commentaire) : ""}</p>`);
+        if (it && safeImg(it.photo)) modal(`<img src="${safeImg(it.photo)}" alt="Photo"><p class="label mt">${h(r.niveau)} · ${h(it.dechet)}${it.commentaire ? " · " + h(it.commentaire) : ""}</p>`);
         break;
       }
       case "csv": exportCsv(); break;
@@ -1714,9 +1880,19 @@
       case "wipe":
         if (!S.records.length) { toast("L'historique est déjà vide."); return; }
         if (ONLINE) {
-          if (!confirm("Effacer DÉFINITIVEMENT tout l'historique, pour TOUS les comptes et tous les appareils ? Pense à exporter le CSV avant.")) return;
-          call("tri_effacer_tout").then(n => { S.records = []; store.del("syncAt"); saveRecords(); route(); toast(`Historique effacé (${n} contrôles)`); })
-            .catch(e => toast(errMsg(e)));
+          modal(`<form id="wipe-form" class="wipe-form">
+              <b>Effacer DÉFINITIVEMENT tout l'historique ?</b>
+              <p>Tous les contrôles et photos, de tous les comptes et appareils, seront supprimés. Pense à exporter le CSV avant.</p>
+              <label class="label" for="wipe-pw">Ton mot de passe administrateur</label>
+              <input id="wipe-pw" type="password" required autocomplete="current-password">
+              <button class="btn-dark" type="submit">Effacer tout</button>
+            </form>`);
+          document.getElementById("wipe-form").onsubmit = ev => {
+            ev.preventDefault();
+            call("tri_effacer_tout", { p_mot_de_passe: document.getElementById("wipe-pw").value })
+              .then(n => { document.getElementById("modal").hidden = true; S.records = []; store.del("syncAt"); saveRecords(); route(); toast(`Historique effacé (${n} contrôles)`); })
+              .catch(e2 => toast(errMsg(e2)));
+          };
           break;
         }
         if (!confirm("Effacer définitivement tout l'historique de cet appareil ? Pense à exporter le CSV avant.")) return;

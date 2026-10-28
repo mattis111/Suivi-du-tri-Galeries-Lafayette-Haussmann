@@ -6,7 +6,10 @@
   <meta name="theme-color" content="#1C2321">
   <meta name="description" content="Contrôle du tri sélectif par magasin, palier, étage et type de déchet.">
   <title>Contrôle tri sélectif</title>
-  <link rel="stylesheet" href="css/style.css?v=20261028-1945">
+  <!-- Sécurité : le navigateur n'exécute que les fichiers de l'appli et ne contacte que Supabase -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <link rel="stylesheet" href="css/style.css?v=20261028-2030">
 </head>
 <body>
   <header class="topbar">
@@ -27,10 +30,12 @@
   </div>
 
   <div class="toast" id="toast" hidden></div>
-  <div class="app-version">Version 20261028-1945</div>
+  <div class="foot-links" id="foot-links"></div>
+  <div class="app-version">Version 20261028-2030</div>
 
-  <script src="js/config.js?v=20261028-1945"></script>
-  <script src="js/xlsx-writer.js?v=20261028-1945"></script>
-  <script src="js/app.js?v=20261028-1945"></script>
+  <script src="js/garde.js?v=20261028-2030"></script>
+  <script src="js/config.js?v=20261028-2030"></script>
+  <script src="js/xlsx-writer.js?v=20261028-2030"></script>
+  <script src="js/app.js?v=20261028-2030"></script>
 </body>
 </html>

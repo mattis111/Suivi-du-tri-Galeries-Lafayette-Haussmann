@@ -28,6 +28,22 @@ Les contrôles, les photos et les comptes sont enregistrés dans une base de don
 
 **Ajouter ou modifier un compte :** connecte-toi en Admin, puis va dans **Suivi → 👥 Comptes**. Les changements sont actifs immédiatement sur tous les appareils. Changer le mot de passe d'un compte le déconnecte de ses autres appareils.
 
+## Sécurité
+
+**Protections intégrées**
+- **Base verrouillée** : personne ne peut lire ni modifier les tables directement. Tout passe par des fonctions qui vérifient la session, le rôle et chaque donnée envoyée (format, longueur, statut, photo, date).
+- **Mots de passe** : chiffrés (bcrypt). 8 caractères minimum, avec lettres et chiffres, et sans l'identifiant. Les mots de passe donnés par l'admin sont **provisoires** : chacun choisit le sien à sa première connexion.
+- **Contre les essais en série** : après 8 mauvais mots de passe en 15 minutes, le compte est bloqué 15 minutes. L'admin peut le débloquer en redonnant un mot de passe.
+- **Sessions** : un jeton aléatoire par appareil. Il expire après 30 jours sans utilisation (90 jours au maximum). Un compte a au plus 10 appareils connectés, et un changement de mot de passe déconnecte les autres appareils.
+- **Effacer l'historique** : réservé à l'administrateur, avec son mot de passe.
+- **Navigateur** : une politique de sécurité (CSP) n'autorise que les fichiers de l'appli et Supabase. Tout ce qui est affiché est échappé et seules de vraies images sont affichées. L'appli refuse aussi de s'afficher à l'intérieur d'un autre site.
+
+**À faire de ton côté (important)**
+- Active la **double authentification (2FA)** sur ton compte **GitHub** et sur ton compte **Supabase**, avec des mots de passe forts. Ce sont les clés de tout le reste.
+- Dans Supabase : **Authentication → Sign In / Providers**, désactive « Allow new users to sign up ». L'appli ne s'en sert pas.
+- Ne publie jamais la clé « secret » ou « service_role », ni le fichier `.sql` (il contient les mots de passe de départ).
+- Sur un appareil partagé, pense à **se déconnecter**.
+
 ## Mettre l'appli en ligne avec GitHub Pages
 
 1. Sur github.com, clique sur **+** (en haut à droite), puis **New repository**.
