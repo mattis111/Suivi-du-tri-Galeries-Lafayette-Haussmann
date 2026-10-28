@@ -2,7 +2,8 @@
 
 Application web de contrôle du tri sélectif par magasin, palier, étage et type de déchet.
 
-- **Contrôle terrain** : choix du magasin, du palier et de l'étage, puis « Bien trié », « Mal trié » (avec commentaire et photo) ou « Non applicable » pour chaque déchet, et bouton **TOUT envoyer**.
+- **Contrôle terrain** : (sous les poubelles, une zone de texte libre « Autre » envoyée avec chaque contrôle)
+   choix du magasin, du palier et de l'étage, puis « Bien trié », « Mal trié » (avec commentaire et photo) ou « Non applicable » pour chaque déchet, et bouton **TOUT envoyer**.
 - **Historique** : filtres (période, magasin, palier, agent, statut, dates, recherche), statistiques, export CSV, export des mal triés en PDF et en Excel.
 - **Tableau de bord** : courbe hebdomadaire du taux de tri de chaque palier (8 à 52 semaines), hausse ▲ ou baisse ▼ par rapport à la semaine précédente, choix des courbes à afficher (une seule, deux, trois… ou la moyenne « Tous paliers ») pour comparer, filtres par agent et par poubelle, tableau semaine par semaine et export Excel.
 - **Analyse par étage** : taux de respect du tri d'une poubelle précise sur un étage précis (ex. Rolls cartons, Provence, Étage 3), sur les dates de ton choix (7 ou 30 derniers jours, mois dernier, 3 derniers mois… ou dates libres), avec sa courbe semaine par semaine ; taux de tri de chaque poubelle pour chaque étage, avec un tableau de tous les étages et le détail de l'étage choisi (barres par catégorie, derniers mal triés), plus un export Excel. Taux de tri = bien triés ÷ (bien triés + mal triés).

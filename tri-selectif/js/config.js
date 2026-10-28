@@ -27,7 +27,7 @@ window.APP_CONFIG = {
       sel: "4f3b5856b0fecddc", hash: "3f74a4ac7f1bc66aeafb7341995128660f0c059f211646b4e4989e45495761d2" },
     { identifiant: "hicham", nom: "Hicham", role: "responsable",
       sel: "bbf17d4e0096743a", hash: "7360ab6d159b86021a37a50ee987eb2edf50dbb6a09861fa23f652101ba846ab" },
-    { identifiant: "khatri", nom: "Khatri", role: "superviseur",
+    { identifiant: "khatri", nom: "Khatri", role: "responsable",
       sel: "32d69cee29829df8", hash: "e1b7539c95f5c618cc62a9f8a729c0d248be396a9391de89b098a32bae8a392d" },
     { identifiant: "hamid", nom: "Hamid", role: "agent",
       sel: "a605d895364dcd88", hash: "1847a950598021ba6f7e8baa90f08c1837f86f9c3b0e433d476fb4197e23f405" }
@@ -40,6 +40,10 @@ window.APP_CONFIG = {
     "DIB",
     "Poubelle à verre"
   ],
+
+  // Zone de texte libre affichée sous les poubelles de chaque étage (sans case à cocher).
+  // Mettre "" pour la retirer.
+  champTexte: "Autre",
 
   // Poubelles en plus, seulement sur certains niveaux.
   // Format : "Magasin|Palier|Niveau": ["Nom de la poubelle", ...]

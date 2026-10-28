@@ -6,7 +6,13 @@
   const DECHETS = CFG.dechets;
   // Poubelles en plus sur certains niveaux (voir config.js > dechetsSupplementaires).
   const EXTRA = CFG.dechetsSupplementaires || {};
-  const dechetsOf = (m, p, n) => DECHETS.concat(EXTRA[`${m}|${p}|${n}`] || []);
+  const dechetsOf = (m, p, n) => {
+    const extra = EXTRA[`${m}|${p}|${n}`] || [];
+    const i = DECHETS.indexOf("Autre");
+    return i < 0 ? DECHETS.concat(extra) : [...DECHETS.slice(0, i), ...extra, ...DECHETS.slice(i)];
+  };
+  const TEXTE = CFG.champTexte || "";            // libellé de la zone de texte libre ("Autre")
+  const noteOf = v => (v && typeof v.__note === "string" ? v.__note.trim() : "");
   const ALL_DECHETS = [...new Set(DECHETS.concat(...Object.values(EXTRA)))];
   const STATUTS = {
     bien: { label: "Bien trié", icon: "✓" },
@@ -33,7 +39,7 @@
     records: store.get("records", []),
     draft: store.get("draft", {}),
     ui: store.get("ui", { mag: 0, pal: 0, niv: {} }),
-    hist: { period: "", mag: "", pal: "", agent: "", statut: "", du: "", au: "", q: "", size: 20, page: 0 },
+    hist: { period: "", mag: "", pal: "", niv: "", agent: "", statut: "", du: "", au: "", q: "", size: 20, page: 0 },
     sup: { agent: "", y: new Date().getFullYear(), m: new Date().getMonth() },
     ana: { mag: 0, pal: 0, niv: 0, dechet: "" },
     dash: { weeks: 12, agent: "", dechet: "" }
@@ -89,7 +95,7 @@
     const t = document.getElementById("toast");
     t.textContent = msg; t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (t.hidden = true), 2600);
+    toastTimer = setTimeout(() => (t.hidden = true), msg.length > 60 ? 4500 : 2600);
   }
   function modal(html) {
     document.getElementById("modal-body").innerHTML = html;
@@ -187,23 +193,19 @@
 
   /* ---------------- Contrôle terrain ---------------- */
   // Dernier envoi de la demi-journée en cours pour un niveau donné.
-  function sentNow(mag, pal, niv) {
-    const now = halfId(new Date());
+  // Dernier envoi (aujourd'hui) d'un niveau, pour information seulement : il ne pré-remplit plus la saisie.
+  function lastSentToday(mag, pal, niv) {
+    const today = ymd(new Date());
     for (let i = S.records.length - 1; i >= 0; i--) {
       const r = S.records[i];
-      if (r.magasin === mag && r.palier === pal && r.niveau === niv && halfId(new Date(r.date)) === now) return r;
+      if (ymd(new Date(r.date)) !== today) break;
+      if (r.magasin === mag && r.palier === pal && r.niveau === niv) return r;
     }
     return null;
   }
-  // Statuts affichés pour un niveau : brouillon en cours, sinon dernier envoi de la demi-journée.
+  // Statuts affichés pour un niveau : uniquement la saisie en cours (vide après chaque envoi).
   function levelValues(mag, pal, niv) {
-    const d = S.draft[nKey(mag, pal, niv)];
-    if (d) return { values: d, sent: null };
-    const r = sentNow(mag, pal, niv);
-    if (!r) return { values: {}, sent: null };
-    const values = {};
-    r.items.forEach(it => (values[it.dechet] = { statut: it.statut, commentaire: it.commentaire || "", photo: it.photo || "" }));
-    return { values, sent: r };
+    return { values: S.draft[nKey(mag, pal, niv)] || {}, sent: lastSentToday(mag, pal, niv) };
   }
   const countDone = (values, list) => (list || DECHETS).filter(x => values[x] && values[x].statut).length;
   const countBad = (values, list) => (list || DECHETS).filter(x => values[x] && values[x].statut === "mal").length;
@@ -250,9 +252,9 @@
     }).join("")}</div>` : "";
 
     const floors = pal.niveaux.map((n, i) => {
-      const L = dechetsOf(mag.nom, pal.nom, n), v = levelValues(mag.nom, pal.nom, n).values, c = countDone(v, L), bad = countBad(v, L);
+      const L = dechetsOf(mag.nom, pal.nom, n), lv = levelValues(mag.nom, pal.nom, n), v = lv.values, c = countDone(v, L), bad = countBad(v, L);
       return `<button class="floor ${i === ni ? "on" : ""} ${c === L.length ? "done" : ""} ${bad ? "bad" : ""}" data-act="niv" data-i="${i}">
-        <b>${h(n)}</b><span>${c}/${L.length}</span></button>`;
+        <b>${h(n)}</b><span>${c}/${L.length}</span>${lv.sent ? `<em title="Dernier envoi aujourd'hui">✓ ${frTime(new Date(lv.sent.date)).slice(0, 5)}</em>` : ""}</button>`;
     }).join("");
 
     const LIST = dechetsOf(mag.nom, pal.nom, niv);
@@ -285,9 +287,13 @@
       <section class="card mt">
         <div class="card-head">
           <h2>${h(niv)}</h2>
-          <span class="count">${sent ? `Envoyé à ${frTime(new Date(sent.date)).slice(0, 5)} · ` : ""}${countDone(values, LIST)}/${LIST.length} contrôlés</span>
+          <span class="count">${sent ? `Dernier envoi ${frTime(new Date(sent.date)).slice(0, 5)} · ` : ""}${countDone(values, LIST)}/${LIST.length} contrôlés</span>
         </div>
         ${items}
+        ${TEXTE ? `<div class="item note-item">
+          <label class="item-name" for="note-field">${h(TEXTE)}</label>
+          <textarea id="note-field" rows="2" placeholder="Remarque libre pour ${h(niv)} (facultatif)">${h((values.__note) || "")}</textarea>
+        </div>` : ""}
         <div class="send-wrap">
           <button class="btn-dark" data-act="send" ${draftCount ? "" : "disabled"}>🚀 TOUT envoyer${draftCount ? ` (${draftCount} niveau${draftCount > 1 ? "x" : ""})` : ""}</button>
         </div>
@@ -297,6 +303,12 @@
     if (sel) sel.scrollIntoView({ block: "nearest", inline: "center" });
 
     // Gestion des champs (commentaire, photo)
+    const note = document.getElementById("note-field");
+    if (note) note.oninput = () => {
+      const had = !!S.draft[nKey(mag.nom, pal.nom, niv)];
+      draftFor(mag.nom, pal.nom, niv).__note = note.value; saveDraft();
+      if (!had) refreshSendButton();
+    };
     $app.querySelectorAll('input[data-act="comment"]').forEach(inp => {
       inp.oninput = () => { draftFor(mag.nom, pal.nom, niv)[inp.dataset.d].commentaire = inp.value; saveDraft(); };
     });
@@ -317,17 +329,21 @@
   // Crée (si besoin) le brouillon d'un niveau, pré-rempli avec le dernier envoi de la demi-journée.
   function draftFor(mag, pal, niv) {
     const k = nKey(mag, pal, niv);
-    if (!S.draft[k]) {
-      const base = levelValues(mag, pal, niv).values;
-      S.draft[k] = JSON.parse(JSON.stringify(base));
-    }
+    if (!S.draft[k]) S.draft[k] = {};
     return S.draft[k];
   }
 
+  function refreshSendButton() {
+    const b = document.querySelector('[data-act="send"]'), n = Object.keys(S.draft).length;
+    if (!b) return;
+    b.disabled = !n;
+    b.textContent = "🚀 TOUT envoyer" + (n ? ` (${n} niveau${n > 1 ? "x" : ""})` : "");
+  }
+
   function sendAll() {
-    const keys = Object.keys(S.draft).filter(k => countDone(S.draft[k], listOfKey(k)) > 0);
+    const keys = Object.keys(S.draft).filter(k => countDone(S.draft[k], listOfKey(k)) > 0 || noteOf(S.draft[k]));
     if (!keys.length) { toast("Rien à envoyer."); return; }
-    const missing = keys.reduce((s, k) => s + (listOfKey(k).length - countDone(S.draft[k], listOfKey(k))), 0);
+    const missing = keys.reduce((s, k) => s + (countDone(S.draft[k], listOfKey(k)) ? listOfKey(k).length - countDone(S.draft[k], listOfKey(k)) : 0), 0);
     if (missing && !confirm(`${missing} élément(s) ne sont pas renseignés. Envoyer quand même ?`)) return;
     const now = new Date().toISOString();
     keys.forEach(k => {
@@ -338,11 +354,13 @@
         if (v.statut === "mal") { if (v.commentaire) it.commentaire = v.commentaire.trim(); if (v.photo) it.photo = v.photo; }
         return it;
       });
-      S.records.push({ id: uid(), date: now, agent: S.user, magasin, palier, niveau, items });
+      const rec = { id: uid(), date: now, agent: S.user, magasin, palier, niveau, items };
+      if (noteOf(S.draft[k])) rec.autre = noteOf(S.draft[k]);
+      S.records.push(rec);
     });
     if (!saveRecords()) { S.records.splice(S.records.length - keys.length); return; }
     S.draft = {}; saveDraft();
-    toast(`✓ ${keys.length} niveau${keys.length > 1 ? "x" : ""} envoyé${keys.length > 1 ? "s" : ""}`);
+    toast(`✓ ${keys.length} niveau${keys.length > 1 ? "x" : ""} envoyé${keys.length > 1 ? "s" : ""} à ${frTime(new Date(now)).slice(0, 5)} — la saisie est vide, prête pour le prochain passage`);
     renderControle();
   }
 
@@ -399,6 +417,10 @@
     const F = S.hist;
     const mag = CFG.magasins.find(m => m.nom === F.mag);
     const palOptions = mag ? mag.paliers : CFG.magasins.flatMap(m => m.paliers).filter((p, i, a) => a.findIndex(x => x.nom === p.nom) === i);
+    // Étages proposés : ceux du palier choisi, sinon de tous les paliers du magasin (ou de tous les magasins).
+    const nivPals = (mag ? mag.paliers : CFG.magasins.flatMap(m => m.paliers)).filter(p => !F.pal || p.nom === F.pal);
+    const nivOptions = [...new Set(nivPals.flatMap(p => p.niveaux))];
+    if (F.niv && !nivOptions.includes(F.niv)) F.niv = "";
     const opt = (v, label, cur) => `<option value="${h(v)}" ${v === cur ? "selected" : ""}>${h(label)}</option>`;
 
     document.getElementById("suivi-body").innerHTML = `
@@ -417,6 +439,7 @@
       <div class="row mt filters">
         <select data-f="mag" aria-label="Magasin">${opt("", "Tous magasins", F.mag)}${CFG.magasins.map(m => opt(m.nom, m.nom, F.mag)).join("")}</select>
         <select data-f="pal" aria-label="Palier">${opt("", "Tous paliers", F.pal)}${palOptions.map(p => opt(p.nom, p.nom, F.pal)).join("")}</select>
+        <select data-f="niv" aria-label="Étage">${opt("", "Tous étages", F.niv)}${nivOptions.map(n => opt(n, n, F.niv)).join("")}</select>
         <select data-f="agent" aria-label="Agent">${opt("", "Tous agents", F.agent)}${agents().map(a => opt(a, a, F.agent)).join("")}</select>
         <select data-f="statut" aria-label="Statut">${opt("", "Tous statuts", F.statut)}${Object.entries(STATUTS).map(([k, s]) => opt(k, s.label, F.statut)).join("")}</select>
         <label class="dt">Du <input type="date" data-f="du" value="${F.du}"></label>
@@ -430,7 +453,9 @@
       el.addEventListener(ev, () => {
         F[el.dataset.f] = el.value; F.page = 0;
         if (el.dataset.f === "du" || el.dataset.f === "au") F.period = "";
-        if (el.dataset.f === "mag") { F.pal = ""; renderHistorique(); } else renderHistResults();
+        if (el.dataset.f === "mag") { F.pal = ""; F.niv = ""; renderHistorique(); }
+        else if (el.dataset.f === "pal") renderHistorique();
+        else renderHistResults();
         if (el.type === "date") document.querySelectorAll('[data-act="period"]').forEach(b => b.classList.remove("on"));
       });
     });
@@ -444,19 +469,25 @@
       const d = new Date(r.date), day = ymd(d);
       if (F.mag && r.magasin !== F.mag) continue;
       if (F.pal && r.palier !== F.pal) continue;
+      if (F.niv && r.niveau !== F.niv) continue;
       if (F.agent && r.agent !== F.agent) continue;
       if (F.du && day < F.du) continue;
       if (F.au && day > F.au) continue;
       if (q) {
-        const txt = [r.magasin, r.palier, r.niveau, r.agent, ...r.items.map(i => i.dechet + " " + (i.commentaire || "") + " " + STATUTS[i.statut].label)].join(" ").toLowerCase();
+        const txt = [r.magasin, r.palier, r.niveau, r.agent, r.autre || "", ...r.items.map(i => i.dechet + " " + (i.commentaire || "") + " " + STATUTS[i.statut].label)].join(" ").toLowerCase();
         if (!txt.includes(q)) continue;
       }
       const items = F.statut ? r.items.filter(i => i.statut === F.statut) : r.items;
-      if (!items.length) continue;
+      if (!items.length && !(r.autre && !F.statut)) continue;
       out.push({ ...r, items });
     }
     return out.sort((a, b) => b.date.localeCompare(a.date));
   }
+
+  // Miniature de la photo d'un mal trié ; un clic l'ouvre en grand.
+  const photoThumb = (r, i) => i.photo
+    ? `<button class="thumb" data-act="showphoto" data-id="${r.id}" data-d="${h(i.dechet)}" title="Agrandir la photo"><img src="${i.photo}" alt="Photo ${h(i.dechet)}" loading="lazy"><span>🔍 Agrandir</span></button>`
+    : "";
 
   function renderHistResults() {
     const F = S.hist, recs = filteredRecords();
@@ -474,11 +505,12 @@
       return `<section class="card rec">
         <div class="rec-head"><b>${h(r.magasin)} — ${h(r.palier)} — ${h(r.niveau)}</b><small>${h(r.agent)} · ${frDate(d)} ${frTime(d)}</small></div>
         ${r.items.map(i => `<div class="rec-line">
-          <div>${h(i.dechet)}${i.commentaire ? `<div class="cm">💬 ${h(i.commentaire)}</div>` : ""}</div>
+          <div>${h(i.dechet)}${i.commentaire ? `<div class="cm">💬 ${h(i.commentaire)}</div>` : ""}${photoThumb(r, i)}</div>
           <div class="row" style="flex-wrap:nowrap">
-            ${i.photo ? `<button class="tag-photo" data-act="showphoto" data-id="${r.id}" data-d="${h(i.dechet)}">📷 Photo</button>` : ""}
+            
             <span class="tag ${i.statut}">${STATUTS[i.statut].label}</span>
           </div></div>`).join("")}
+        ${r.autre ? `<div class="rec-line note-line"><div>${h(TEXTE || "Autre")}</div><div class="note-text">${h(r.autre)}</div></div>` : ""}
       </section>`;
     }).join("");
 
@@ -512,6 +544,7 @@
         if (onlyMal && i.statut !== "mal") return;
         rows.push({ r, i, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, i.dechet, STATUTS[i.statut].label, i.commentaire || "", i.photo ? "Oui" : "Non"] });
       });
+      if (!onlyMal && r.autre) rows.push({ r, i: { dechet: TEXTE || "Autre" }, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, TEXTE || "Autre", "Texte libre", r.autre, "Non"] });
     });
     return rows;
   }
@@ -535,7 +568,7 @@
     if (!rows.length) return toast("Aucun élément mal trié pour ces critères.");
     const F = S.hist;
     const crit = [F.du && "du " + F.du.split("-").reverse().join("/"), F.au && "au " + F.au.split("-").reverse().join("/"),
-      F.mag, F.pal, F.agent].filter(Boolean).join(" · ") || "Toutes périodes";
+      F.mag, F.pal, F.niv, F.agent].filter(Boolean).join(" · ") || "Toutes périodes";
     const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Mal triés ${stamp()}</title>
       <style>
         body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1C2321;margin:24px;font-size:11px}
@@ -667,6 +700,30 @@
   }
   function drawFocusChart() { if (focusData) drawChart(focusData.weeks, focusData.series); }
 
+  // Remarques libres ("Autre") : pas de taux ni de graphique, juste le texte, étage par étage.
+  function notesByFloor(mags) {
+    const F = S.hist, recs = baseRecords().filter(r => r.autre);
+    const cards = mags.flatMap(m => m.paliers.filter(p => !F.pal || p.nom === F.pal).map(p => {
+      const rows = p.niveaux.map(n => {
+        const list = recs.filter(r => r.magasin === m.nom && r.palier === p.nom && r.niveau === n)
+          .sort((a, b) => b.date.localeCompare(a.date));
+        return `<div class="note-floor">
+          <div class="note-floor-name">${h(n)}${list.length ? ` <span class="note-count">${list.length}</span>` : ""}</div>
+          <div class="note-floor-list">${list.length ? list.map(r => `<div class="note-entry">
+              <span>📝 ${h(r.autre)}</span>
+              <small>${h(r.agent)} · ${frDate(new Date(r.date))} ${frTime(new Date(r.date)).slice(0, 5)}</small>
+            </div>`).join("") : `<span class="note-none">Aucune remarque</span>`}</div>
+        </div>`;
+      }).join("");
+      return `<section class="card mt">
+        <div class="card-head"><h2 style="font-family:var(--sans);font-size:13px">${h(m.nom)} — ${h(p.nom)}</h2>
+          <span class="count">${recs.filter(r => r.magasin === m.nom && r.palier === p.nom).length} remarque(s)</span></div>
+        ${rows}
+      </section>`;
+    })).join("");
+    return `<div class="label mt2">Remarques « ${h(TEXTE)} » par étage · ${rangeLabel(F)}</div>${cards}`;
+  }
+
   function renderAnalyse() {
     const A = S.ana, F = S.hist;
     const stats = floorStats(baseRecords());
@@ -697,6 +754,9 @@
       .sort((a, b) => b.date.localeCompare(a.date))
       .flatMap(r => r.items.filter(i => i.statut === "mal").map(i => ({ r, i })))
       .slice(0, 8);
+    const noteList = baseRecords()
+      .filter(r => r.autre && r.magasin === mag.nom && r.palier === pal.nom && r.niveau === niv)
+      .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
 
     const optIdx = (arr, cur, lab) => arr.map((x, i) => `<option value="${i}" ${i === cur ? "selected" : ""}>${h(lab(x))}</option>`).join("");
 
@@ -768,12 +828,17 @@
           <div class="stat n"><b>${tot.na}</b><span>Non applicable</span></div>
         </div>
         <div class="cats">${catRows}</div>
+        ${noteList.length ? `<div class="mal-list">
+          <div class="label" style="margin-bottom:6px">Dernières remarques « ${h(TEXTE || "Autre")} »</div>
+          ${noteList.map(r => `<div class="rec-line" style="padding:6px 0"><div class="cm" style="margin:0">📝 ${h(r.autre)}</div>
+            <small class="label" style="letter-spacing:0;white-space:nowrap">${h(r.agent)} · ${frDate(new Date(r.date))}</small></div>`).join("")}
+        </div>` : ""}
         ${malList.length ? `<div class="mal-list">
           <div class="label" style="margin-bottom:6px">Derniers mal triés de l'étage</div>
           ${malList.map(({ r, i }) => `<div class="rec-line" style="padding:6px 0">
-            <div>${h(i.dechet)}${i.commentaire ? `<div class="cm">💬 ${h(i.commentaire)}</div>` : ""}</div>
+            <div>${h(i.dechet)}${i.commentaire ? `<div class="cm">💬 ${h(i.commentaire)}</div>` : ""}${photoThumb(r, i)}</div>
             <div class="row" style="flex-wrap:nowrap">
-              ${i.photo ? `<button class="tag-photo" data-act="showphoto" data-id="${r.id}" data-d="${h(i.dechet)}">📷 Photo</button>` : ""}
+              
               <small class="label" style="letter-spacing:0">${h(r.agent)} · ${frDate(new Date(r.date))}</small>
             </div></div>`).join("")}
         </div>` : ""}
