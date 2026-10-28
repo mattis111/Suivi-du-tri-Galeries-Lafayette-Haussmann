@@ -192,7 +192,6 @@
   }
 
   /* ---------------- Contrôle terrain ---------------- */
-  // Dernier envoi de la demi-journée en cours pour un niveau donné.
   // Dernier envoi (aujourd'hui) d'un niveau, pour information seulement : il ne pré-remplit plus la saisie.
   function lastSentToday(mag, pal, niv) {
     const today = ymd(new Date());
