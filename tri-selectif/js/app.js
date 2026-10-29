@@ -20,6 +20,13 @@
   // Clé de la k-ième photo (1 à 3) d'une poubelle sur le serveur : "DIB", "DIB#2", "DIB#3"
   const photoKey = (dechet, k) => (k === 1 ? dechet : dechet + "#" + k);
   // Nombre de photos d'une poubelle dans un contrôle enregistré
+  // Photos en attente sur le téléphone (saisie en cours + envois pas encore partis)
+  function localPhotoCount() {
+    let n = 0;
+    Object.values(S.draft).forEach(v => { n += notePhotosOf(v).length; Object.values(v || {}).forEach(x => { if (x && typeof x === "object" && !Array.isArray(x)) n += itemPhotosOf(x).length; }); });
+    S.outbox.forEach(r => { n += (r.autre_photos || []).length; r.items.forEach(i => { n += (i.photos || (i.photo ? [i.photo] : [])).length; }); });
+    return n;
+  }
   const nbItemPhotos = i => (Array.isArray(i.photos) ? i.photos.length : i.nphotos ? +i.nphotos : i.photo ? 1 : 0);
   const notePhotosOf = v => (v && Array.isArray(v.__photos) ? v.__photos : []);
   // Nombre de photos « Autre » d'un contrôle (tableau d'images en attente, ou nombre venant du serveur)
@@ -45,6 +52,50 @@
     del(key) { try { localStorage.removeItem("tri." + key); } catch (e) {} }
   };
 
+  /* ---------- Grand stockage sur l'appareil (IndexedDB : des centaines de Mo, pour les photos) ----------
+     Saisie en cours, envois en attente et copie de l'historique y sont rangés.
+     Si IndexedDB n'est pas disponible, on se replie sur le petit stockage (localStorage). */
+  const big = (() => {
+    let dbp = null;
+    const open = () => dbp || (dbp = new Promise((res, rej) => {
+      const r = indexedDB.open("tri-selectif", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    }));
+    const tx = async (mode, fn) => {
+      const db = await open();
+      return new Promise((res, rej) => {
+        const t = db.transaction("kv", mode), req = fn(t.objectStore("kv"));
+        t.oncomplete = () => res(req ? req.result : undefined);
+        t.onerror = t.onabort = () => rej(t.error || new Error("IDB"));
+      });
+    };
+    const ok = typeof indexedDB !== "undefined";
+    return {
+      async get(k, fallback) {
+        if (ok) try { const v = await tx("readonly", st => st.get(k)); if (v !== undefined) return v; } catch (e) {}
+        return store.get(k, fallback);
+      },
+      async set(k, v) {
+        if (ok) try { await tx("readwrite", st => st.put(v, k)); try { localStorage.removeItem("tri." + k); } catch (e) {} return true; } catch (e) {}
+        return store.set(k, v);
+      },
+      async del(k) { if (ok) try { await tx("readwrite", st => st.delete(k)); } catch (e) {} store.del(k); }
+    };
+  })();
+  // Écritures regroupées (la saisie change à chaque frappe) ; on force l'écriture quand l'appli passe en arrière-plan.
+  const pendingWrites = {};
+  function persistSoon(key, getValue, delay) {
+    clearTimeout((pendingWrites[key] || {}).t);
+    pendingWrites[key] = { getValue, t: setTimeout(() => { delete pendingWrites[key]; big.set(key, getValue()).then(ok => { if (!ok) toast("Stockage du téléphone plein : envoie tes contrôles dès que possible."); }); }, delay) };
+  }
+  function flushWrites() {
+    Object.keys(pendingWrites).forEach(k => { const w = pendingWrites[k]; clearTimeout(w.t); delete pendingWrites[k]; big.set(k, w.getValue()); });
+  }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushWrites(); });
+  window.addEventListener("pagehide", flushWrites);
+
   const S = {
     user: null, role: null, ident: null, jeton: null,
     records: [],
@@ -57,9 +108,13 @@
     dash: { weeks: 12, agent: "", dechet: "" }
   };
   // En ligne : copie locale de l'historique (pour l'affichage hors réseau). Hors ligne : stockage principal.
-  const saveRecords = () => (ONLINE ? store.set("cache", S.records.filter(r => !r._attente), true) || true : store.set("records", S.records));
-  const saveOutbox = () => store.set("outbox", S.outbox);
-  const saveDraft = () => store.set("draft", S.draft);
+  const saveRecords = () => {
+    if (ONLINE) { persistSoon("cache", () => S.records.filter(r => !r._attente), 400); return true; }
+    return store.set("records", S.records);
+  };
+  // Les envois en attente sont écrits tout de suite (et on attend la confirmation) : aucune perte possible.
+  const saveOutbox = () => { clearTimeout((pendingWrites.outbox || {}).t); delete pendingWrites.outbox; return big.set("outbox", S.outbox); };
+  const saveDraft = () => { persistSoon("draft", () => S.draft, 250); return true; };
   const saveUi = () => store.set("ui", S.ui);
 
   /* ---------------- Comptes & permissions ---------------- */
@@ -135,7 +190,7 @@
   }
   function closeSession() {
     S.user = S.role = S.ident = S.jeton = null; S.doitChanger = false;
-    store.del("session"); store.del("cache"); store.del("syncAt");
+    store.del("session"); big.del("cache"); store.del("syncAt");
     S.records = ONLINE ? [] : store.get("records", []);
     photoCache = {};
   }
@@ -146,7 +201,7 @@
     store.del("user");
     const sess = store.get("session", null);
     if (ONLINE) {
-      if (sess && sess.jeton && ROLES[sess.role]) { openSession(sess); S.records = store.get("cache", []); }
+      if (sess && sess.jeton && ROLES[sess.role]) { openSession(sess); S.records = []; }   // copie locale chargée au démarrage
       else store.del("session");
     } else {
       const acc = sess && findAccount(sess.identifiant);
@@ -249,8 +304,12 @@
   function header(eyebrow, title, actions) {
     document.getElementById("hdr-eyebrow").textContent = eyebrow;
     document.getElementById("hdr-title").textContent = title;
-    document.getElementById("hdr-actions").innerHTML = actions;
+    const dark = isDark();
+    document.getElementById("hdr-actions").innerHTML =
+      `<button class="hbtn theme-btn" data-act="theme" title="${dark ? "Passer en mode clair" : "Passer en mode sombre"}" aria-label="${dark ? "Mode clair" : "Mode sombre"}">${dark ? "☀️" : "🌙"}</button>` + actions;
   }
+  // Mode sombre : réglé par js/theme.js au chargement ; le bouton mémorise le choix sur l'appareil.
+  const isDark = () => document.documentElement.getAttribute("data-theme") === "dark";
   const userBox = () => S.user
     ? `<button class="hbtn huser" data-act="logout"><span><small>${h(S.user)} · ${h(ROLES[S.role].label)}</small>Se déconnecter</span></button>` : "";
 
@@ -270,6 +329,7 @@
     renderControle();
   }
   window.addEventListener("hashchange", route);
+  window.TriRoute = () => { if (document.getElementById("hdr-actions")) route(); };
 
   /* ---------------- Changement de mot de passe ---------------- */
   function renderChangePassword(force) {
@@ -500,6 +560,7 @@
       }
       dft.__photos = list;
       if (saveDraft()) renderControle();
+      photoReminder();
     };
     $app.querySelectorAll('input[data-act="comment"]').forEach(inp => {
       inp.oninput = () => { draftFor(mag.nom, pal.nom, niv)[inp.dataset.d].commentaire = inp.value; saveDraft(); };
@@ -515,6 +576,7 @@
         }
         v.photos = list; delete v.photo;
         if (saveDraft()) renderControle();
+        photoReminder();
       };
     });
     current = { mag, pal, niv, palKey };
@@ -528,6 +590,12 @@
     return S.draft[k];
   }
 
+  // Au-delà de 100 photos gardées sur le téléphone, on rappelle d'envoyer (sans rien bloquer).
+  function photoReminder() {
+    const n = localPhotoCount();
+    if (n >= 100) toast(`📷 ${n} photos gardées sur le téléphone : pense à envoyer dès que tu as du réseau.`);
+  }
+
   function refreshSendButton() {
     const b = document.querySelector('[data-act="send"]'), n = Object.keys(S.draft).length;
     if (!b) return;
@@ -535,7 +603,7 @@
     b.textContent = "🚀 TOUT envoyer" + (n ? ` (${n} niveau${n > 1 ? "x" : ""})` : "");
   }
 
-  function sendAll() {
+  async function sendAll() {
     const keys = Object.keys(S.draft).filter(k => countDone(S.draft[k], listOfKey(k)) > 0 || noteOf(S.draft[k]) || notePhotosOf(S.draft[k]).length);
     if (!keys.length) { toast("Rien à envoyer."); return; }
     const missing = keys.reduce((s, k) => s + (countDone(S.draft[k], listOfKey(k)) ? listOfKey(k).length - countDone(S.draft[k], listOfKey(k)) : 0), 0);
@@ -561,8 +629,12 @@
     });
     const nb = `${keys.length} niveau${keys.length > 1 ? "x" : ""}`;
     if (ONLINE) {
-      if (!saveOutbox()) { S.outbox.splice(S.outbox.length - keys.length); return; }
-      S.draft = {}; saveDraft();
+      if (!(await saveOutbox())) {
+        S.outbox.splice(S.outbox.length - keys.length);
+        alert("Le stockage du téléphone est plein : rien n'a été perdu (ta saisie est toujours là), mais l'envoi n'a pas pu être préparé. Libère de la place sur le téléphone puis réessaie.");
+        return;
+      }
+      S.draft = {}; saveDraft(); flushWrites();
       addPendingToRecords();
       envoiEnCours = true;
       renderControle();
@@ -638,7 +710,7 @@
             }
           }
           const ids = new Set(batch.map(r => r.id));
-          S.outbox = S.outbox.filter(r => !ids.has(r.id)); saveOutbox();
+          S.outbox = S.outbox.filter(r => !ids.has(r.id)); await saveOutbox();
           S.records.forEach(r => { if (ids.has(r.id)) delete r._attente; });
           sent += batch.length;
           if (visible) updateLoading(sent, total, label(sent));
@@ -1126,7 +1198,7 @@
       const wi = weeks.findIndex(w => t >= w.start.getTime() && t < w.end.getTime());
       if (wi >= 0) rec.items.forEach(i => { if (i.dechet === dechet) wk[wi][i.statut]++; });
     });
-    focusData = { weeks, series: [{ key: "focus", nom: dechet, full: `${dechet} — ${pal.nom} ${niv}`, color: SERIES_COLORS[0], rates: wk.map(rateOf) }] };
+    focusData = { weeks, series: [{ key: "focus", nom: dechet, full: `${dechet} — ${pal.nom} ${niv}`, color: seriesColor(0), rates: wk.map(rateOf) }] };
     return `<section class="card mt focus">
       <div class="detail-head">
         <div>
@@ -1338,12 +1410,15 @@
 
   /* ---------------- Tableau de bord : évolution hebdomadaire par palier ---------------- */
   // Couleurs fixes par palier (suivent le palier, jamais son rang) – palette validée daltonisme.
-  const SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
+  const SERIES_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
+  const SERIES_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
+  // Couleur d'un palier : la même teinte dans les deux modes, ajustée pour le fond clair ou sombre
+  const seriesColor = i => (isDark() ? SERIES_DARK : SERIES_LIGHT)[i % SERIES_LIGHT.length];
   const ALL_PALIERS = CFG.magasins.flatMap(m => m.paliers.map(p => ({
     key: m.nom + "|" + p.nom,
     nom: p.nom,
     full: m.nom + " — " + p.nom
-  }))).map((p, i) => ({ ...p, color: SERIES_COLORS[i % SERIES_COLORS.length] }));
+  }))).map((p, i) => ({ ...p, ci: i }));
 
   function isoWeek(d) {
     const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -1383,7 +1458,7 @@
       });
       if (arr) arr[wi].n++;
     });
-    const series = ALL_PALIERS.map(p => ({ ...p, rates: per[p.key].map(rateOf), counts: per[p.key] }));
+    const series = ALL_PALIERS.map(p => ({ ...p, color: seriesColor(p.ci), rates: per[p.key].map(rateOf), counts: per[p.key] }));
     return { weeks, series, overall: all.map(rateOf) };
   }
 
@@ -1410,7 +1485,7 @@
     const D = S.dash;
     const { weeks, series: pals, overall } = dashData();
     // Courbe "Tous paliers" (moyenne de tous les paliers), en encre foncée.
-    const series = [...pals, { key: "__all", nom: "Tous paliers", full: "Tous paliers", color: "#1C2321", rates: overall }];
+    const series = [...pals, { key: "__all", nom: "Tous paliers", full: "Tous paliers", color: isDark() ? "#E8E6E1" : "#1C2321", rates: overall }];
     const shown = dashShown();
     const vis = series.filter(s => shown[s.key]);
     const n = weeks.length, cur = n - 1, prev = n - 2;
@@ -1509,7 +1584,7 @@
 
     let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Courbe hebdomadaire du taux de tri par palier">`;
     [0, 25, 50, 75, 100].forEach(v => {
-      svg += `<line x1="${m.l}" x2="${m.l + pw}" y1="${Y(v)}" y2="${Y(v)}" stroke="#ECE9E2" stroke-width="1"/>`;
+      svg += `<line x1="${m.l}" x2="${m.l + pw}" y1="${Y(v)}" y2="${Y(v)}" stroke="${isDark() ? "#2A3230" : "#ECE9E2"}" stroke-width="1"/>`;
       svg += `<text x="${m.l - 6}" y="${Y(v) + 3}" text-anchor="end" class="ax">${v}%</text>`;
     });
     weeks.forEach((w, i) => {
@@ -1534,7 +1609,7 @@
         pi = i;
       });
       s.rates.forEach((r, i) => {
-        if (r !== null) svg += `<circle cx="${X(i)}" cy="${Y(r)}" r="3.5" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        if (r !== null) svg += `<circle cx="${X(i)}" cy="${Y(r)}" r="3.5" fill="${s.color}" stroke="${isDark() ? "#1B2120" : "#fff"}" stroke-width="2"/>`;
       });
       let li = -1; s.rates.forEach((r, i) => { if (r !== null) li = i; });
       if (li >= 0) ends.push({ s, y: Y(s.rates[li]), v: s.rates[li], x: X(li) });
@@ -1549,7 +1624,7 @@
       svg += `<line x1="${m.l + pw + 2}" x2="${m.l + pw + 6}" y1="${e.y}" y2="${e.y}" stroke="${e.s.color}" stroke-width="2"/>`;
     });
 
-    svg += `<line id="xh" x1="0" x2="0" y1="${m.t}" y2="${m.t + ph}" stroke="#1C2321" stroke-width="1" opacity="0"/>`;
+    svg += `<line id="xh" x1="0" x2="0" y1="${m.t}" y2="${m.t + ph}" stroke="${isDark() ? "#E8E6E1" : "#1C2321"}" stroke-width="1" opacity="0"/>`;
     svg += `<rect id="hit" x="${m.l - 12}" y="${m.t}" width="${pw + 24}" height="${ph}" fill="transparent"/>`;
     svg += `</svg>`;
     if (!series.length) svg = `<div class="empty">Aucune courbe affichée. Coche un palier ci-dessus pour l'ajouter.</div>`;
@@ -1884,6 +1959,7 @@
         } else { S.records = store.get("records", []); route(); toast("Données actualisées"); }
         break;
       case "retry": flushOutbox(true); break;
+      case "theme": window.TriTheme.set(isDark() ? "light" : "dark"); route(); break;
       case "rmnotephoto": {
         const dft = draftFor(current.mag.nom, current.pal.nom, current.niv);
         dft.__photos = notePhotosOf(dft).filter((_, n) => n !== +el.dataset.n); saveDraft(); renderControle(); break;
@@ -1981,12 +2057,24 @@
     }
   });
 
-  route();
-  // Au démarrage (en ligne) : vérifie la session, envoie ce qui attend, récupère les nouveaux contrôles.
-  if (ONLINE && S.jeton) {
-    call("tri_moi").then(me => {
-      if (me.role !== S.role || me.nom !== S.user) { openSession(Object.assign({}, me, { jeton: S.jeton })); store.set("session", Object.assign({}, me, { jeton: S.jeton })); route(); }
-    }).catch(() => {});
-    syncAll(!store.get("syncAt", null));
-  }
+  // Démarrage : charge la saisie, les envois en attente et la copie de l'historique depuis le grand stockage.
+  (async function boot() {
+    $app.innerHTML = `<div class="empty">Chargement…</div>`;
+    S.draft = await big.get("draft", S.draft) || {};
+    S.outbox = await big.get("outbox", S.outbox) || [];
+    // ancien stockage (localStorage) → grand stockage
+    if (localStorage.getItem("tri.draft")) await big.set("draft", S.draft);
+    if (localStorage.getItem("tri.outbox")) await big.set("outbox", S.outbox);
+    if (ONLINE && S.jeton) { S.records = await big.get("cache", []) || []; addPendingToRecords(); }
+    // demande au navigateur de ne pas effacer ces données pour faire de la place
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+    route();
+    // En ligne : vérifie la session, envoie ce qui attend, récupère les nouveaux contrôles.
+    if (ONLINE && S.jeton) {
+      call("tri_moi").then(me => {
+        if (me.role !== S.role || me.nom !== S.user) { openSession(Object.assign({}, me, { jeton: S.jeton })); store.set("session", Object.assign({}, me, { jeton: S.jeton })); route(); }
+      }).catch(() => {});
+      syncAll(!store.get("syncAt", null));
+    }
+  })();
 })();

@@ -9,13 +9,17 @@ Application web de contrôle du tri sélectif par magasin, palier, étage et typ
 - **Analyse par étage** : taux de respect du tri d'une poubelle précise sur un étage précis (ex. Rolls cartons, Provence, Étage 3), sur les dates de ton choix (7 ou 30 derniers jours, mois dernier, 3 derniers mois… ou dates libres), avec sa courbe semaine par semaine ; taux de tri de chaque poubelle pour chaque étage, avec un tableau de tous les étages et le détail de l'étage choisi (barres par catégorie, derniers mal triés), plus un export Excel. Taux de tri = bien triés ÷ (bien triés + mal triés).
 - **Supervision** : calendrier mensuel, avec une pastille pour le matin et une pour l'après-midi, et un taux de réalisation.
 
+## Mode sombre
+
+Le bouton 🌙 / ☀️ en haut à droite passe l'appli en mode sombre ou clair, et le choix est mémorisé sur l'appareil. Sans choix, l'appli suit le réglage du téléphone ou de l'ordinateur.
+
 ## Données partagées (Supabase)
 
 Les contrôles, les photos et les comptes sont enregistrés dans une base de données en ligne (Supabase). Tous les appareils voient donc les mêmes données : un contrôle envoyé depuis le téléphone d'un agent apparaît dans le Suivi des responsables.
 
 - La base se prépare une seule fois, avec le script `tri-selectif-supabase.sql` (Supabase > SQL Editor > Run). Ne le mets pas sur GitHub : il contient les mots de passe de départ.
 - L'adresse du projet et la clé **publique** sont dans `js/config.js` (partie `supabase`). Ne mets jamais la clé « secret » ou « service_role » dans ce fichier.
-- **Sans réseau** (sous-sol, par exemple), l'envoi est gardé sur le téléphone et repart automatiquement dès le retour du réseau. Un bandeau « en attente d'envoi » l'indique.
+- **Sans réseau** (sous-sol, par exemple), la saisie et les envois sont gardés dans le grand stockage du téléphone (IndexedDB), testé avec 100 photos et plus. Ils repartent automatiquement dès le retour du réseau. Un bandeau « en attente d'envoi » l'indique.
 
 ## Comptes et accès
 
