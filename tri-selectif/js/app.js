@@ -376,6 +376,7 @@
     $app.className = "";
     $app.innerHTML = `
       <form class="card login" id="login-form" autocomplete="on">
+        <img class="login-logo" src="assets/logo.svg?v=20261029-1930" alt="Logo Tri sélectif" width="72" height="72">
         <div class="label">Organisation · ${h(CFG.organisation)}</div>
         <h2>Connexion</h2>
         <label class="label" for="login-id">Identifiant</label>

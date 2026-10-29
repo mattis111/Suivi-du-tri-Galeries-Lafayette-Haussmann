@@ -9,6 +9,10 @@ Application web de contrôle du tri sélectif par magasin, palier, étage et typ
 - **Analyse par étage** : taux de respect du tri d'une poubelle précise sur un étage précis (ex. Rolls cartons, Provence, Étage 3), sur les dates de ton choix (7 ou 30 derniers jours, mois dernier, 3 derniers mois… ou dates libres), avec sa courbe semaine par semaine ; taux de tri de chaque poubelle pour chaque étage, avec un tableau de tous les étages et le détail de l'étage choisi (barres par catégorie, derniers mal triés), plus un export Excel. Taux de tri = bien triés ÷ (bien triés + mal triés).
 - **Supervision** : calendrier mensuel, avec une pastille pour le matin et une pour l'après-midi, et un taux de réalisation.
 
+## Logo et icône
+
+Le logo « Dôme et paliers » est dans le dossier `assets/` : `logo.svg` (icône), `logo-marque.svg` (barre du haut) et les icônes PNG pour l'écran d'accueil. Sur téléphone, « Ajouter à l'écran d'accueil » crée une icône avec ce logo.
+
 ## Mode sombre
 
 Le bouton 🌙 / ☀️ en haut à droite passe l'appli en mode sombre ou clair, et le choix est mémorisé sur l'appareil. Sans choix, l'appli suit le réglage du téléphone ou de l'ordinateur.
