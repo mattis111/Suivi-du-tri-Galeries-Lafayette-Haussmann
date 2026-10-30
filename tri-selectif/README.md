@@ -32,6 +32,7 @@ Les contrôles, les photos et les comptes sont enregistrés dans une base de don
 | **Administrateur** | Tout : contrôle, suivi, supervision, exports, gestion des comptes, effacement de l'historique |
 | **Responsable** | Tout, sauf l'effacement des données et l'onglet Comptes |
 | **Superviseur** | Interface des paliers, et consultation et export des données (Historique, Tableau de bord, Analyse) |
+| **Spectateur** | Consultation seule : Historique, Tableau de bord, Analyse, Supervision. Aucune saisie, aucun export, aucune modification (refusé aussi par le serveur) |
 | **Agent** | Uniquement la saisie des contrôles. Il ne voit que ses propres envois |
 
 **Ajouter ou modifier un compte :** connecte-toi en Admin, puis va dans **Suivi → 👥 Comptes**. Les changements sont actifs immédiatement sur tous les appareils. Changer le mot de passe d'un compte le déconnecte de ses autres appareils.

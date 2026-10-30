@@ -125,6 +125,8 @@
     // Superviseur : interface des paliers + consultation des données envoyées (Historique, Tableau de bord, Analyse).
     // Pas de Supervision, pas de comptes, pas de données de démo ni d'effacement.
     superviseur: { label: "Superviseur",    perms: ["controle", "suivi", "export"] },
+    // Spectateur : consultation seule (historique, tableau de bord, analyse, supervision) ; aucune saisie, aucun export, aucune modification.
+    spectateur:  { label: "Spectateur",     perms: ["suivi", "supervision"] },
     agent:       { label: "Agent",          perms: ["controle"] }
   };
   const ACCOUNTS = CFG.comptes || [];
@@ -325,6 +327,10 @@
         : r.includes("comptes") && can("comptes") ? "comptes" : "historique";
       return renderSuivi(tab);
     }
+    if (!can("controle")) {                      // consultation seule : directement au Suivi
+      if (can("suivi")) { history.replaceState(null, "", "#/suivi/historique"); return renderSuivi("historique"); }
+      $app.innerHTML = `<div class="card empty mt2">Ce compte n'a accès à aucun écran.</div>`; return;
+    }
     if (r && r !== "controle") { history.replaceState(null, "", "#/controle"); }
     renderControle();
   }
@@ -376,7 +382,7 @@
     $app.className = "";
     $app.innerHTML = `
       <form class="card login" id="login-form" autocomplete="on">
-        <img class="login-logo" src="assets/logo.svg?v=20261029-1930" alt="Logo Tri sélectif" width="72" height="72">
+        <img class="login-logo" src="assets/logo.svg?v=20261030-1840" alt="Logo Tri sélectif" width="72" height="72">
         <div class="label">Organisation · ${h(CFG.organisation)}</div>
         <h2>Connexion</h2>
         <label class="label" for="login-id">Identifiant</label>
@@ -393,7 +399,9 @@
       const btn = e.target.querySelector("button"); btn.disabled = true;
       if (ONLINE) {
         try {
-          const acc = await api("tri_connexion", { p_identifiant: id, p_mot_de_passe: pw });
+          // identifiant tapé avec accents, espaces ou majuscules : « Service généraux » → « servicegeneraux »
+          const idNorm = String(id).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "");
+          const acc = await api("tri_connexion", { p_identifiant: idNorm, p_mot_de_passe: pw });
           if (!acc || acc.erreur || !acc.jeton) throw new Error((acc && acc.erreur) || "IDENTIFIANTS_INVALIDES");
           openSession(acc);
           store.set("session", acc);
@@ -457,6 +465,7 @@
   }
 
   function renderControle() {
+    if (!can("controle")) { location.hash = "#/suivi/historique"; return; }
     header("Contrôle terrain", "Tri sélectif par palier",
       `${can("suivi") ? `<button class="hbtn" data-act="go" data-to="#/suivi">📊 Suivi</button>` : ""}${userBox()}`);
     $app.className = "";
@@ -780,8 +789,8 @@
 
   /* ---------------- Suivi : historique & supervision ---------------- */
   function renderSuivi(tab) {
-    header("Supervision", "Suivi — " + CFG.organisation,
-      `<button class="hbtn" data-act="go" data-to="#/controle">← Contrôle</button>${userBox()}`);
+    header(S.role === "spectateur" ? "Consultation" : "Supervision", "Suivi — " + CFG.organisation,
+      `${can("controle") ? `<button class="hbtn" data-act="go" data-to="#/controle">← Contrôle</button>` : ""}${userBox()}`);
     $app.className = "wide";
     $app.innerHTML = `
       <div class="row">
@@ -840,11 +849,11 @@
     document.getElementById("suivi-body").innerHTML = `
       <div class="row between mt2">
         <button class="btn" data-act="refresh">↻ Actualiser</button>
-        <div class="row">
+        ${can("export") ? `<div class="row">
           <button class="btn" data-act="csv">⬇ Exporter CSV</button>
           <button class="btn" data-act="pdf">📄 Mal triés (PDF)</button>
           <button class="btn" data-act="xlsx">📗 Mal triés (Excel)</button>
-        </div>
+        </div>` : `<span class="label" style="letter-spacing:.06em">👁 Consultation seule</span>`}
       </div>
       <div class="row mt">
         <span class="label">Période</span>
@@ -1315,7 +1324,7 @@
     document.getElementById("suivi-body").innerHTML = `
       <div class="row between mt2">
         <button class="btn" data-act="refresh">↻ Actualiser</button>
-        <button class="btn" data-act="anaxlsx">📗 Exporter l'analyse (Excel)</button>
+        ${can("export") ? `<button class="btn" data-act="anaxlsx">📗 Exporter l'analyse (Excel)</button>` : ""}
       </div>
       ${filterBar()}
 
@@ -1522,7 +1531,7 @@
     document.getElementById("suivi-body").innerHTML = `
       <div class="row between mt2">
         <button class="btn" data-act="refresh">↻ Actualiser</button>
-        <button class="btn" data-act="dashxlsx">📗 Exporter (Excel)</button>
+        ${can("export") ? `<button class="btn" data-act="dashxlsx">📗 Exporter (Excel)</button>` : ""}
       </div>
       <div class="row mt filters">
         <span class="label">Période</span>
@@ -1720,7 +1729,7 @@
           ${ed ? `<button class="btn" type="button" data-act="oacccancel">Annuler</button>` : ""}
         </div>
         <p class="hint">Les changements sont actifs immédiatement, sur tous les appareils. Le mot de passe donné ici est <b>provisoire</b> : la personne devra choisir le sien à sa connexion (8 caractères minimum, lettres et chiffres). Le changer déconnecte ses appareils et débloque le compte s'il était bloqué.<br>
-        Agent : saisie des contrôles uniquement · Superviseur : paliers + consultation et export des données · Responsable : tout sauf l'effacement des données et les comptes · Administrateur : tout.</p>
+        Agent : saisie des contrôles uniquement · Spectateur : consultation seule (aucune saisie, aucun export, aucune modification) · Superviseur : paliers + consultation et export des données · Responsable : tout sauf l'effacement des données et les comptes · Administrateur : tout.</p>
       </form>`;
     document.getElementById("acc-form").onsubmit = async e => {
       e.preventDefault();
@@ -1918,7 +1927,7 @@
     const el = e.target.closest("[data-act]");
     if (!el || el.tagName === "INPUT") return;
     const a = el.dataset.act;
-    const NEED = { chpw: "controle", csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
+    const NEED = { send: "controle", set: "controle", retry: "controle", reset: "controle", csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
     if (NEED[a] && !can(NEED[a])) { toast("Action non autorisée pour ton compte."); return; }
     switch (a) {
       case "go": location.hash = el.dataset.to; break;
