@@ -375,6 +375,22 @@ main.wide { max-width: 680px; }
 .cal-day.blank { border: 0; background: none; }
 .cal-day.today { border: 1.5px solid var(--ink); }
 .cal-day .n { font-family: var(--mono); font-size: 9.5px; font-weight: 700; }
+/* Prénoms : cachés, affichés dans une bulle seulement au survol de la souris */
+.cal-day { position: relative; }
+.whos { display: none; }
+@media (hover: hover) {
+  .cal-day:hover { z-index: 5; }
+  .cal-day:hover .whos {
+    display: flex; flex-direction: column; gap: 3px; position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: var(--on-ink); border-radius: 6px; padding: 7px 9px; min-width: 120px; max-width: 220px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.25); pointer-events: none; white-space: normal;
+  }
+  .cal-grid > .cal-day:nth-child(7n) .whos, .cal-grid > .cal-day:nth-child(7n-1) .whos { left: auto; right: 0; transform: none; }
+  .cal-grid > .cal-day:nth-child(7n+1) .whos { left: 0; transform: none; }
+}
+.who { font-size: 11px; line-height: 1.35; }
+.who i { font-style: normal; font-family: var(--mono); font-size: 9px; opacity: .7; margin-right: 4px; }
+.who b { font-weight: 600; }
 .dots { display: flex; gap: 5px; justify-content: center; }
 .dot { width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--faint); }
 .dot.ok { background: var(--green); border-color: var(--green); }
@@ -411,7 +427,7 @@ main.wide { max-width: 680px; }
 }
 @media (max-width: 420px) {
   .topbar h1 { font-size: 16px; }
-  .cal-day { padding: 4px; }
+  .cal-day { padding: 4px 3px; }
   .dot { width: 7px; height: 7px; }
 }
 
@@ -540,3 +556,12 @@ html[data-theme="dark"] .loading { background: rgba(0, 0, 0, .65); }
 .topbar-titles { flex: 1; min-width: 0; }
 .login-logo { display: block; width: 72px; height: 72px; margin: 0 0 14px; }
 @media (max-width: 420px) { .topbar-logo { width: 34px; height: 34px; } }
+
+/* « Marque ajoutée : Oui / Non » sous un mal trié */
+.marque-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.marque-label { font-size: 12px; font-weight: 600; margin-right: 4px; }
+.choice.marque { min-width: 56px; justify-content: center; }
+.choice.marque.on.oui { background: var(--green-bg); border-color: var(--green); color: var(--green); font-weight: 600; }
+.choice.marque.on.non { background: var(--na-bg); border-color: var(--na); color: var(--na); font-weight: 600; }
+.marque-cm b { color: var(--ink); }
+.marque-nom { border-color: var(--green) !important; }

@@ -27,6 +27,20 @@
     S.outbox.forEach(r => { n += (r.autre_photos || []).length; r.items.forEach(i => { n += (i.photos || (i.photo ? [i.photo] : [])).length; }); });
     return n;
   }
+  // « Marque ajoutée » sur une poubelle mal triée : true (Oui), false (Non) ou non renseigné
+  const marqueTxt = m => (m === true ? "Oui" : m === false ? "Non" : "");
+  // Nom de marque : clé de regroupement sans majuscules, accents ni espaces en trop (« Louis Vuitton » = « louis vuitton »)
+  const marqueCle = t => String(t || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+  // Marques déjà saisies (pour les suggestions), avec l'orthographe la plus utilisée
+  function marquesConnues() {
+    const parCle = {};
+    S.records.forEach(r => r.items.forEach(i => {
+      if (!i.marque_nom) return;
+      const k = marqueCle(i.marque_nom), o = parCle[k] || (parCle[k] = {});
+      o[i.marque_nom.trim()] = (o[i.marque_nom.trim()] || 0) + 1;
+    }));
+    return Object.values(parCle).map(o => Object.entries(o).sort((a, b) => b[1] - a[1])[0][0]).sort((a, b) => a.localeCompare(b, "fr"));
+  }
   const nbItemPhotos = i => (Array.isArray(i.photos) ? i.photos.length : i.nphotos ? +i.nphotos : i.photo ? 1 : 0);
   const notePhotosOf = v => (v && Array.isArray(v.__photos) ? v.__photos : []);
   // Nombre de photos « Autre » d'un contrôle (tableau d'images en attente, ou nombre venant du serveur)
@@ -227,6 +241,8 @@
       autre_photos: Math.max(0, Math.min(4, parseInt(r.autre_photos, 10) || 0)),
       items: (Array.isArray(r.items) ? r.items : []).filter(i => i && statutOk(i.statut)).map(i => ({
         dechet: str(i.dechet), statut: i.statut, commentaire: i.commentaire ? str(i.commentaire) : undefined,
+        marque: i.statut === "mal" && (i.marque === true || i.marque === false) ? i.marque : undefined,
+        marque_nom: i.statut === "mal" && i.marque === true && i.marque_nom ? str(i.marque_nom).slice(0, 60) : undefined,
         photo: i.photo || i.nphotos ? true : undefined,
         nphotos: i.photo || i.nphotos ? Math.max(1, Math.min(3, parseInt(i.nphotos, 10) || 1)) : undefined
       }))
@@ -382,7 +398,7 @@
     $app.className = "";
     $app.innerHTML = `
       <form class="card login" id="login-form" autocomplete="on">
-        <img class="login-logo" src="assets/logo.svg?v=20261030-1840" alt="Logo Tri sélectif" width="72" height="72">
+        <img class="login-logo" src="assets/logo.svg?v=20261118-2130" alt="Logo Tri sélectif" width="72" height="72">
         <div class="label">Organisation · ${h(CFG.organisation)}</div>
         <h2>Connexion</h2>
         <label class="label" for="login-id">Identifiant</label>
@@ -507,6 +523,12 @@
         `<button class="choice ${k} ${v.statut === k ? "on" : ""}" data-act="set" data-d="${h(d)}" data-s="${k}"><i>${s.icon}</i>${s.label}</button>`).join("");
       const extra = v.statut === "mal" ? `
         <div class="mal-extra">
+          <div class="marque-row">
+            <span class="marque-label">Marque ajoutée</span>
+            <button class="choice marque ${v.marque === true ? "on oui" : ""}" data-act="marque" data-d="${h(d)}" data-v="oui" aria-pressed="${v.marque === true}">Oui</button>
+            <button class="choice marque ${v.marque === false ? "on non" : ""}" data-act="marque" data-d="${h(d)}" data-v="non" aria-pressed="${v.marque === false}">Non</button>
+          </div>
+          ${v.marque === true ? `<input type="text" class="marque-nom" maxlength="60" list="marques-connues" autocomplete="off" placeholder="Nom de la marque (ex. Dior)" aria-label="Nom de la marque pour ${h(d)}" value="${h(v.marque_nom || "")}" data-act="marquenom" data-d="${h(d)}">` : ""}
           <input type="text" maxlength="300" placeholder="Commentaire (ex. carton non plié)" value="${h(v.commentaire || "")}" data-act="comment" data-d="${h(d)}">
           <div class="note-photos">
             ${itemPhotosOf(v).map((src, n) => safeImg(src) ? `<span class="np"><img src="${safeImg(src)}" alt="Photo ${n + 1}" data-act="zoom"><button class="np-del" data-act="rmphoto" data-d="${h(d)}" data-n="${n}" title="Retirer cette photo">×</button></span>` : "").join("")}
@@ -558,6 +580,13 @@
       draftFor(mag.nom, pal.nom, niv).__note = note.value; saveDraft();
       if (!had) refreshSendButton();
     };
+    if (!document.getElementById("marques-connues")) {
+      const dl = document.createElement("datalist"); dl.id = "marques-connues"; document.body.appendChild(dl);
+    }
+    document.getElementById("marques-connues").innerHTML = marquesConnues().map(m => `<option value="${h(m)}"></option>`).join("");
+    $app.querySelectorAll('input[data-act="marquenom"]').forEach(inp => {
+      inp.oninput = () => { draftFor(mag.nom, pal.nom, niv)[inp.dataset.d].marque_nom = inp.value; saveDraft(); };
+    });
     const np = $app.querySelector('input[data-act="notephoto"]');
     if (np) np.onchange = async () => {
       const dft = draftFor(mag.nom, pal.nom, niv);
@@ -625,6 +654,8 @@
         const v = S.draft[k][d];
         const it = { dechet: d, statut: v.statut };
         if (v.statut === "mal") {
+          if (v.marque === true || v.marque === false) it.marque = v.marque;
+          if (v.marque === true && String(v.marque_nom || "").trim()) it.marque_nom = String(v.marque_nom).trim().replace(/\s+/g, " ").slice(0, 60);
           if (v.commentaire) it.commentaire = v.commentaire.trim();
           const ph = itemPhotosOf(v).filter(x => safeImg(x)).slice(0, MAX_PHOTOS_MAL);
           if (ph.length) it.photos = ph;
@@ -853,6 +884,7 @@
           <button class="btn" data-act="csv">⬇ Exporter CSV</button>
           <button class="btn" data-act="pdf">📄 Mal triés (PDF)</button>
           <button class="btn" data-act="xlsx">📗 Mal triés (Excel)</button>
+          <button class="btn" data-act="marquesxlsx">🏷 Marques (Excel)</button>
         </div>` : `<span class="label" style="letter-spacing:.06em">👁 Consultation seule</span>`}
       </div>
       <div class="row mt">
@@ -979,7 +1011,7 @@
       return `<section class="card rec">
         <div class="rec-head"><b>${h(r.magasin)} — ${h(r.palier)} — ${h(r.niveau)}</b><small>${h(r.agent)} · ${frDate(d)} ${frTime(d)}</small></div>
         ${r.items.map(i => `<div class="rec-line">
-          <div>${h(i.dechet)}${i.commentaire ? `<div class="cm">💬 ${h(i.commentaire)}</div>` : ""}${photoThumb(r, i)}</div>
+          <div>${h(i.dechet)}${marqueTxt(i.marque) ? `<div class="cm marque-cm">🏷 Marque ajoutée : <b>${marqueTxt(i.marque)}</b>${i.marque_nom ? ` — <b>${h(i.marque_nom)}</b>` : ""}</div>` : ""}${i.commentaire ? `<div class="cm">💬 ${h(i.commentaire)}</div>` : ""}${photoThumb(r, i)}</div>
           <div class="row" style="flex-wrap:nowrap">
             
             <span class="tag ${statutOk(i.statut) ? i.statut : ""}">${h(statutOk(i.statut) ? STATUTS[i.statut].label : "?")}</span>
@@ -1016,13 +1048,13 @@
       const d = new Date(r.date);
       r.items.forEach(i => {
         if (onlyMal && i.statut !== "mal") return;
-        rows.push({ r, i, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, i.dechet, STATUTS[i.statut].label, i.commentaire || "", nbItemPhotos(i) ? `Oui (${nbItemPhotos(i)})` : "Non"] });
+        rows.push({ r, i, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, i.dechet, STATUTS[i.statut].label, marqueTxt(i.marque), i.marque_nom || "", i.commentaire || "", nbItemPhotos(i) ? `Oui (${nbItemPhotos(i)})` : "Non"] });
       });
-      if (!onlyMal && (r.autre || nbAutre(r))) rows.push({ r, i: { dechet: TEXTE || "Autre" }, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, TEXTE || "Autre", "Texte libre", r.autre || "", nbAutre(r) ? `Oui (${nbAutre(r)})` : "Non"] });
+      if (!onlyMal && (r.autre || nbAutre(r))) rows.push({ r, i: { dechet: TEXTE || "Autre" }, d, cols: [frDate(d), frTime(d), r.agent, r.magasin, r.palier, r.niveau, TEXTE || "Autre", "Texte libre", "", "", r.autre || "", nbAutre(r) ? `Oui (${nbAutre(r)})` : "Non"] });
     });
     return rows;
   }
-  const HEAD = ["Date", "Heure", "Agent", "Magasin", "Palier", "Niveau", "Déchet", "Statut", "Commentaire", "Photo"];
+  const HEAD = ["Date", "Heure", "Agent", "Magasin", "Palier", "Niveau", "Déchet", "Statut", "Marque ajoutée", "Marque", "Commentaire", "Photo"];
   const stamp = () => ymd(new Date());
 
   function exportCsv() {
@@ -1091,6 +1123,60 @@
     download(XlsxWriter.build([head, ...lines], "Mal triés", { images }), `mal-tries-${stamp()}.xlsx`);
     toast(`Fichier Excel prêt${images.length ? ` : ${images.length} photo(s) insérée(s)` : ""}`);
   }
+  /* Export « Marques » : nombre de mal triés par marque, une colonne par semaine (plus récente à gauche),
+     comme le tableau « Semaine 46 / Semaine 45 ». Respecte les filtres magasin, palier, étage et agent.
+     Semaines : celles de la période choisie (Du / Au ou raccourci), sinon la semaine en cours et la précédente. */
+  function exportMarques() {
+    const F = S.hist;
+    let semaines;
+    if (F.du || F.au) semaines = weeksForRange(F.du, F.au).reverse();
+    else semaines = lastWeeks(2).reverse();
+    if (semaines.length > 26) semaines = semaines.slice(0, 26);
+    const garde = r => (!F.mag || r.magasin === F.mag) && (!F.pal || r.palier === F.pal) && (!F.niv || r.niveau === F.niv) && (!F.agent || r.agent === F.agent);
+    const blocs = semaines.map(w => {
+      const t0 = w.start.getTime(), t1 = w.end.getTime(), parCle = {};
+      S.records.forEach(r => {
+        const t = new Date(r.date).getTime();
+        if (t < t0 || t >= t1 || !garde(r)) return;
+        r.items.forEach(i => {
+          if (i.statut !== "mal" || !i.marque_nom) return;
+          const k = marqueCle(i.marque_nom), o = parCle[k] || (parCle[k] = { n: 0, noms: {} });
+          o.n++; o.noms[i.marque_nom.trim()] = (o.noms[i.marque_nom.trim()] || 0) + 1;
+        });
+      });
+      const lignes = Object.values(parCle)
+        .map(o => ({ nom: Object.entries(o.noms).sort((a, b) => b[1] - a[1])[0][0], n: o.n }))
+        .sort((a, b) => b.n - a.n || a.nom.localeCompare(b.nom, "fr"));
+      return { titre: `Semaine ${w.num}`, num: w.num, annee: w.annee, start: w.start, lignes };
+    });
+    if (!blocs.some(b => b.lignes.length)) return toast("Aucun mal trié avec un nom de marque sur ces semaines.");
+    // grille : chaque semaine = 2 colonnes (Marque | Nombre d'anomalies) + 1 colonne vide
+    const nbLignes = Math.max(...blocs.map(b => b.lignes.length));
+    const grille = Array.from({ length: nbLignes + 4 }, () => []);
+    const filtres = [F.mag, F.pal, F.niv, F.agent].filter(Boolean).join(" · ");
+    const annees = [...new Set(blocs.map(b => b.annee))].sort();
+    const plusieursAnnees = annees.length > 1;
+    grille[0][0] = { v: "Mal triés par marque — " + annees.join("-") + (filtres ? " — " + filtres : ""), bold: true };
+    blocs.forEach((b, k) => {
+      const c = k * 3, L = colLetter(c + 1);
+      // l'année est indiquée à côté du numéro dès que l'export couvre deux années (ex. « Semaine 1 (2027) »)
+      // titre : « Semaine 48 — du 23 novembre au 29 novembre » (avec l'année si l'export ou la semaine couvre deux années)
+      const lun = b.start, dim = new Date(lun.getFullYear(), lun.getMonth(), lun.getDate() + 6);
+      const avecAn = plusieursAnnees || lun.getFullYear() !== dim.getFullYear();
+      const jour = d => d.toLocaleDateString("fr-FR", avecAn ? { day: "numeric", month: "long", year: "numeric" } : { day: "numeric", month: "long" });
+      grille[1][c] = { v: `${b.titre} — du ${jour(lun)} au ${jour(dim)}`, head: true }; grille[1][c + 1] = { v: "Nombre d'anomalies", head: true };
+      b.lignes.forEach((l, n) => { grille[2 + n][c] = l.nom; grille[2 + n][c + 1] = l.n; });
+      const fin = 2 + b.lignes.length;
+      const total = b.lignes.reduce((t, l) => t + l.n, 0);
+      grille[fin][c] = { v: "Total", bold: true };
+      grille[fin][c + 1] = b.lignes.length ? { f: `SUM(${L}3:${L}${fin})`, v: total, bold: true } : { v: 0, bold: true };
+    });
+    const nom = blocs.map(b => `${b.annee}-S${pad(b.num)}`).join("_");
+    download(XlsxWriter.build(grille, "Marques", { noHeader: true }), `marques-mal-tries-${nom}.xlsx`);
+    toast(`Fichier Excel prêt : ${blocs.map(b => `${b.titre}${plusieursAnnees ? " " + b.annee : ""} (${b.lignes.length} marque${b.lignes.length > 1 ? "s" : ""})`).join(", ")}`);
+  }
+  const colLetter = i => { let s = ""; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
+
   async function exportPdf() {
     const rows = exportRows(true);
     if (!rows.length) return toast("Aucun élément mal trié pour ces critères.");
@@ -1109,8 +1195,8 @@
       </style></head><body>
       <h1>Éléments mal triés — ${h(CFG.organisation)}</h1>
       <div class="sub">${h(crit)} · ${rows.length} élément(s) · édité le ${frDate(new Date())} par ${h(S.user)}</div>
-      <table><thead><tr><th>Date</th><th>Agent</th><th>Magasin</th><th>Palier</th><th>Niveau</th><th>Déchet</th><th>Commentaire</th><th>Photo</th></tr></thead><tbody>
-      ${rows.map(({ r, i, d }) => `<tr><td>${frDate(d)} ${frTime(d).slice(0, 5)}</td><td>${h(r.agent)}</td><td>${h(r.magasin)}</td><td>${h(r.palier)}</td><td>${h(r.niveau)}</td><td>${h(i.dechet)}</td><td>${h(i.commentaire || "")}</td><td>${((rows.find(x => x.i === i) || {}).srcs || []).filter(safeImg).map(src => `<img src="${src}">`).join(" ")}</td></tr>`).join("")}
+      <table><thead><tr><th>Date</th><th>Agent</th><th>Magasin</th><th>Palier</th><th>Niveau</th><th>Déchet</th><th>Marque</th><th>Commentaire</th><th>Photo</th></tr></thead><tbody>
+      ${rows.map(({ r, i, d }) => `<tr><td>${frDate(d)} ${frTime(d).slice(0, 5)}</td><td>${h(r.agent)}</td><td>${h(r.magasin)}</td><td>${h(r.palier)}</td><td>${h(r.niveau)}</td><td>${h(i.dechet)}</td><td>${h(i.marque_nom || marqueTxt(i.marque))}</td><td>${h(i.commentaire || "")}</td><td>${((rows.find(x => x.i === i) || {}).srcs || []).filter(safeImg).map(src => `<img src="${src}">`).join(" ")}</td></tr>`).join("")}
       </tbody></table></body></html>`;
     const frame = document.createElement("iframe");
     frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
@@ -1188,9 +1274,9 @@
     const out = [];
     for (let w = mon(start); w <= end && out.length < 104; w = new Date(w.getFullYear(), w.getMonth(), w.getDate() + 7)) {
       const e = new Date(w.getFullYear(), w.getMonth(), w.getDate() + 7);
-      out.push({ start: w, end: e, label: "S" + isoWeek(w), sub: `${pad(w.getDate())}/${pad(w.getMonth() + 1)}` });
+      out.push(weekObj(w, e));
     }
-    return out;
+    return markYears(out);
   }
 
   // Fiche "taux de respect du tri" d'une poubelle sur un étage, pour la période choisie.
@@ -1365,7 +1451,7 @@
         ${malList.length ? `<div class="mal-list">
           <div class="label" style="margin-bottom:6px">Derniers mal triés de l'étage</div>
           ${malList.map(({ r, i }) => `<div class="rec-line" style="padding:6px 0">
-            <div>${h(i.dechet)}${i.commentaire ? `<div class="cm">💬 ${h(i.commentaire)}</div>` : ""}${photoThumb(r, i)}</div>
+            <div>${h(i.dechet)}${marqueTxt(i.marque) ? `<div class="cm marque-cm">🏷 Marque ajoutée : <b>${marqueTxt(i.marque)}</b>${i.marque_nom ? ` — <b>${h(i.marque_nom)}</b>` : ""}</div>` : ""}${i.commentaire ? `<div class="cm">💬 ${h(i.commentaire)}</div>` : ""}${photoThumb(r, i)}</div>
             <div class="row" style="flex-wrap:nowrap">
               
               <small class="label" style="letter-spacing:0">${h(r.agent)} · ${frDate(new Date(r.date))}</small>
@@ -1430,13 +1516,27 @@
     full: m.nom + " — " + p.nom
   }))).map((p, i) => ({ ...p, ci: i }));
 
-  function isoWeek(d) {
+  /* Numéro de semaine ISO 8601 (norme française, celle des agendas) : la semaine 1 est celle qui contient
+     le premier jeudi de janvier ; le numéro repart à 1 chaque année, et l'année de la semaine est calculée
+     à partir de la date (ex. lundi 28/12/2026 → semaine 53 de 2026, lundi 04/01/2027 → semaine 1 de 2027). */
+  function isoWeekYear(d) {
     const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
     const day = t.getUTCDay() || 7;
     t.setUTCDate(t.getUTCDate() + 4 - day);
     const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
-    return Math.ceil(((t - y0) / 86400000 + 1) / 7);
+    return { w: Math.ceil(((t - y0) / 86400000 + 1) / 7), y: t.getUTCFullYear() };
   }
+  const isoWeek = d => isoWeekYear(d).w;
+  const weekObj = (start, end) => {
+    const iw = isoWeekYear(start);
+    return { start, end, label: "S" + iw.w, num: iw.w, annee: iw.y, sub: `${pad(start.getDate())}/${pad(start.getMonth() + 1)}` };
+  };
+  // si les semaines affichées couvrent deux années, on ajoute l'année sous chaque semaine (ex. 28/12/26)
+  const markYears = weeks => {
+    if (new Set(weeks.map(w => w.start.getFullYear())).size > 1)
+      weeks.forEach(w => { w.sub += "/" + String(w.start.getFullYear()).slice(2); });
+    return weeks;
+  };
   function lastWeeks(n) {
     const now = new Date();
     const mon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
@@ -1444,9 +1544,9 @@
     for (let i = n - 1; i >= 0; i--) {
       const start = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() - 7 * i);
       const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
-      out.push({ start, end, label: "S" + isoWeek(start), sub: `${pad(start.getDate())}/${pad(start.getMonth() + 1)}` });
+      out.push(weekObj(start, end));
     }
-    return out;
+    return markYears(out);
   }
 
   function dashData() {
@@ -1827,7 +1927,14 @@
     const first = new Date(P.y, P.m, 1), days = new Date(P.y, P.m + 1, 0).getDate();
     const offset = (first.getDay() + 6) % 7;
     const now = new Date();
-    const done = new Set(S.records.filter(r => !P.agent || r.agent === P.agent).map(r => halfId(new Date(r.date))));
+    // qui a contrôlé chaque demi-journée (tous les prénoms si plusieurs personnes ont fait le contrôle)
+    const qui = {};
+    S.records.filter(r => !P.agent || r.agent === P.agent).forEach(r => {
+      const k = halfId(new Date(r.date)), nom = String(r.agent || "?").trim();
+      (qui[k] || (qui[k] = new Set())).add(nom);
+    });
+    const done = new Set(Object.keys(qui));
+    const noms = k => [...(qui[k] || [])].sort((a, b) => a.localeCompare(b, "fr"));
 
     let ok = 0, expected = 0, cells = "";
     for (let i = 0; i < offset; i++) cells += `<div class="cal-day blank"></div>`;
@@ -1838,12 +1945,14 @@
         { id: key + "-pm", end: new Date(P.y, P.m, day + 1) }
       ];
       const dots = halves.map(x => {
-        if (done.has(x.id)) { ok++; expected++; return `<span class="dot ok" title="Contrôle fait"></span>`; }
+        if (done.has(x.id)) { ok++; expected++; return `<span class="dot ok" title="Contrôle fait par ${h(noms(x.id).join(", "))}"></span>`; }
         if (x.end <= now) { expected++; return `<span class="dot ko" title="Manqué"></span>`; }
         return `<span class="dot" title="À venir"></span>`;
       }).join("");
+      const who = [["am", "Matin"], ["pm", "Après-midi"]].filter(([x]) => qui[key + "-" + x])
+        .map(([x, lib]) => `<span class="who" title="${lib} : ${h(noms(key + "-" + x).join(", "))}"><i>${lib}</i> ${noms(key + "-" + x).map(n => `<b>${h(n)}</b>`).join(", ")}</span>`).join("");
       cells += `<button class="cal-day ${key === ymd(now) ? "today" : ""}" data-act="day" data-day="${key}" title="Voir l'historique du ${frDate(d)}">
-        <span class="n">${day}</span><span class="dots">${dots}</span></button>`;
+        <span class="n">${day}</span><span class="dots">${dots}</span>${who ? `<span class="whos">${who}</span>` : ""}</button>`;
     }
     const taux = expected ? Math.round(ok / expected * 100) + "%" : "—";
 
@@ -1875,7 +1984,7 @@
           <span><span class="dot ok"></span>Contrôle fait</span>
           <span><span class="dot ko"></span>Manqué</span>
           <span><span class="dot"></span>À venir</span>
-          <span class="hint">Pastille gauche = matin · droite = après-midi</span>
+          <span class="hint">Pastille gauche = matin · droite = après-midi · passez la souris sur un jour pour voir qui a contrôlé</span>
         </div>
       </section>`;
     document.getElementById("sup-agent").onchange = e => { P.agent = e.target.value; renderSupervision(); };
@@ -1927,7 +2036,7 @@
     const el = e.target.closest("[data-act]");
     if (!el || el.tagName === "INPUT") return;
     const a = el.dataset.act;
-    const NEED = { send: "controle", set: "controle", retry: "controle", reset: "controle", csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
+    const NEED = { marquesxlsx: "export", send: "controle", set: "controle", marque: "controle", retry: "controle", reset: "controle", csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
     if (NEED[a] && !can(NEED[a])) { toast("Action non autorisée pour ton compte."); return; }
     switch (a) {
       case "go": location.hash = el.dataset.to; break;
@@ -1945,6 +2054,13 @@
         if (dft[d] && dft[d].statut === s) delete dft[d];
         else if (s === "mal") dft[d] = { ...(dft[d] || {}), statut: s };
         else dft[d] = { statut: s };     // plus « Mal trié » : on retire ses photos et son commentaire
+        saveDraft(); renderControle(); break;
+      }
+      case "marque": {
+        const v = draftFor(current.mag.nom, current.pal.nom, current.niv)[el.dataset.d];
+        const val = el.dataset.v === "oui";
+        if (v.marque === val) delete v.marque; else v.marque = val;      // re-cliquer enlève la réponse
+        if (v.marque !== true) delete v.marque_nom;
         saveDraft(); renderControle(); break;
       }
       case "rmphoto": {
@@ -2035,6 +2151,7 @@
       }
       case "csv": exportCsv(); break;
       case "xlsx": exportXlsx(); break;
+      case "marquesxlsx": exportMarques(); break;
       case "pdf": exportPdf(); break;
       case "month": {
         const m = S.sup.m + +el.dataset.d;
