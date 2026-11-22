@@ -565,3 +565,8 @@ html[data-theme="dark"] .loading { background: rgba(0, 0, 0, .65); }
 .choice.marque.on.non { background: var(--na-bg); border-color: var(--na); color: var(--na); font-weight: 600; }
 .marque-cm b { color: var(--ink); }
 .marque-nom { border-color: var(--green) !important; }
+
+/* Bloc « Tableau directeurs de département » (Administrateur) */
+.dir-bloc { padding: 12px 14px; }
+.dir-bloc .row { align-items: center; gap: 10px; }
+.dir-bloc select { max-width: 100%; }

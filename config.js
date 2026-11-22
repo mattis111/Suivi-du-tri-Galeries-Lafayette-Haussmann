@@ -66,5 +66,15 @@ window.APP_CONFIG = {
 
   // Heure (0-23) à laquelle le matin se termine et l'après-midi commence,
   // pour le calendrier de supervision.
-  heureFinMatin: 13
+  heureFinMatin: 13,
+
+  // Tableau « Directeurs de département » (compte Administrateur) :
+  // code affiché dans la colonne Magasin, et directeur responsable selon le magasin et l'étage.
+  // (les étages non listés ici — ex. Coupole Étages 7 à 9 et Sous-sol 3 — restent sans directeur)
+  codesMagasin: { "Coupole": "GL1", "Homme": "GL2" },
+  directeurs: [
+    { nom: "LOCATELLI Jean-Luc", magasin: "Homme" },
+    { nom: "Valérie JUSTE", magasin: "Coupole", niveaux: ["Étage 6", "Étage 5", "Étage 4", "Étage 3", "Étage 2"] },
+    { nom: "Benjamin FONTENAS", magasin: "Coupole", niveaux: ["Étage 1", "RDC", "Sous-sol 1"] }
+  ]
 };

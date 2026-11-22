@@ -99,9 +99,21 @@
       imgRows[im.row] = Math.max(imgRows[im.row] || 0, im.dh + 2 * PAD);
       widths[im.col] = Math.max(widths[im.col] || 8, Math.ceil((im.dw + 2 * PAD) / 7) + 1);
     });
+
+    // styles personnalisés : ajoutés après les 13 styles de base
+    const extraFills = [], extraXfs = [], xfKeys = {};
+    const xfFor = st => {
+      const key = JSON.stringify(st);
+      if (xfKeys[key] !== undefined) return xfKeys[key];
+      let fillId = 0;
+      if (st.fill) { let i = extraFills.indexOf(st.fill); if (i < 0) { extraFills.push(st.fill); i = extraFills.length - 1; } fillId = 3 + i; }
+      const fontId = st.bold ? 2 : 0, borderId = st.border ? 1 : 0;
+      extraXfs.push(`<xf numFmtId="0" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment ${st.center ? 'horizontal="center" ' : ""}vertical="center" wrapText="1"/></xf>`);
+      return (xfKeys[key] = 13 + extraXfs.length - 1);
+    };
+    if (opts.widths) opts.widths.forEach((w, i) => { if (w) widths[i] = Math.max(widths[i] || 8, w); });
     const cols = "<cols>" + widths.map((w, i) =>
       `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("") + "</cols>";
-
     const body = rows.map((r, ri) => {
       const cells = r.map((v, ci) => {
         const ref = colName(ci) + (ri + 1);
@@ -110,11 +122,13 @@
           if (v.head) style = ' s="1"';
           if (v.bold) style = ' s="3"';
           if (v.center) style = v.head ? ' s="5"' : v.bold ? ' s="6"' : ' s="4"';   // centré horizontalement
-          if (v.border) {   // quadrillage fin autour de la cellule
+          if (v.st) style = ` s="${xfFor(v.st)}"`;
+          if (v.border && !v.st) {   // quadrillage fin autour de la cellule
             const k = (v.head ? "h" : v.bold ? "b" : "n") + (v.center ? "c" : "");
             style = ` s="${{ n: 7, nc: 8, h: 9, hc: 10, b: 11, bc: 12 }[k]}"`;
           }
           if (v.f) return `<c r="${ref}"${style}><f>${esc(v.f)}</f>${typeof v.v === "number" ? `<v>${v.v}</v>` : ""}</c>`;
+          if (v.v === null || v.v === undefined || v.v === "") return (v.st || v.border) ? `<c r="${ref}"${style}/>` : "";   // case vide mais encadrée / colorée
           v = v.v;
         }
         if (typeof v === "number" && isFinite(v)) return `<c r="${ref}"${style}><v>${v}</v></c>`;
@@ -127,7 +141,7 @@
 
     const hasImg = images.length > 0;
     const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>${cols}<sheetData>${body}</sheetData>${hasImg ? '<drawing r:id="rId1"/>' : ""}</worksheet>`;
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>${cols}<sheetData>${body}</sheetData>${(opts.listes || []).length ? `<dataValidations count="${opts.listes.length}">${opts.listes.map(l => `<dataValidation type="list" allowBlank="1" showErrorMessage="0" sqref="${l.ref}"><formula1>${esc('"' + l.valeurs.join(",") + '"')}</formula1></dataValidation>`).join("")}</dataValidations>` : ""}${hasImg ? '<drawing r:id="rId1"/>' : ""}</worksheet>`;
 
     const EMU = 9525; // 1 pixel en unités Office
     const drawing = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -149,7 +163,7 @@
       { name: "xl/_rels/workbook.xml.rels", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
       { name: "xl/styles.xml", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1C2321"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF808080"/></left><right style="thin"><color rgb="FF808080"/></right><top style="thin"><color rgb="FF808080"/></top><bottom style="thin"><color rgb="FF808080"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="13"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1" xfId="0"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyBorder="1" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyBorder="1" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="0" borderId="1" applyBorder="1" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="0" borderId="1" applyBorder="1" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>` },
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="${3 + extraFills.length}"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1C2321"/><bgColor indexed="64"/></patternFill></fill>${extraFills.map(f => `<fill><patternFill patternType="solid"><fgColor rgb="FF${f}"/><bgColor indexed="64"/></patternFill></fill>`).join("")}</fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF808080"/></left><right style="thin"><color rgb="FF808080"/></right><top style="thin"><color rgb="FF808080"/></top><bottom style="thin"><color rgb="FF808080"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${13 + extraXfs.length}"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1" xfId="0"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyBorder="1" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyBorder="1" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="0" borderId="1" applyBorder="1" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="0" borderId="1" applyBorder="1" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>${extraXfs.join("")}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>` },
       { name: "xl/worksheets/sheet1.xml", data: sheet }
     ];
     if (hasImg) {

@@ -119,7 +119,7 @@
     hist: { period: "", mag: "", pal: "", niv: "", agent: "", statut: "", du: "", au: "", q: "", size: 20, page: 0 },
     sup: { agent: "", y: new Date().getFullYear(), m: new Date().getMonth() },
     ana: { mag: 0, pal: 0, niv: 0, dechet: "" },
-    dash: { weeks: 12, agent: "", dechet: "" }
+    dash: { per: "3m", agent: "", dechet: "" }
   };
   // En ligne : copie locale de l'historique (pour l'affichage hors réseau). Hors ligne : stockage principal.
   const saveRecords = () => {
@@ -133,7 +133,7 @@
 
   /* ---------------- Comptes & permissions ---------------- */
   const ROLES = {
-    admin:       { label: "Administrateur", perms: ["controle", "suivi", "export", "supervision", "demo", "wipe", "comptes"] },
+    admin:       { label: "Administrateur", perms: ["controle", "suivi", "export", "supervision", "demo", "wipe", "comptes", "directeurs"] },
     // Responsable : tout, sauf l'effacement des données et la gestion des comptes.
     responsable: { label: "Responsable",    perms: ["controle", "suivi", "export", "supervision", "demo"] },
     // Superviseur : interface des paliers + consultation des données envoyées (Historique, Tableau de bord, Analyse).
@@ -398,7 +398,7 @@
     $app.className = "";
     $app.innerHTML = `
       <form class="card login" id="login-form" autocomplete="on">
-        <img class="login-logo" src="assets/logo.svg?v=20261119-1600" alt="Logo Tri sélectif" width="72" height="72">
+        <img class="login-logo" src="assets/logo.svg?v=20261123-0110" alt="Logo Tri sélectif" width="72" height="72">
         <div class="label">Organisation · ${h(CFG.organisation)}</div>
         <h2>Connexion</h2>
         <label class="label" for="login-id">Identifiant</label>
@@ -887,6 +887,7 @@
           <button class="btn" data-act="marquesxlsx">🏷 Marques (Excel)</button>
         </div>` : `<span class="label" style="letter-spacing:.06em">👁 Consultation seule</span>`}
       </div>
+      ${can("directeurs") ? tableauDirecteursBloc() : ""}
       <div class="row mt">
         <span class="label">Période</span>
         ${periodPills(F)}
@@ -1174,6 +1175,78 @@
     const nom = blocs.map(b => `${b.annee}-S${pad(b.num)}`).join("_");
     download(XlsxWriter.build(grille, "Marques", { noHeader: true }), `marques-mal-tries-${nom}.xlsx`);
     toast(`Fichier Excel prêt : ${blocs.map(b => `${b.titre}${plusieursAnnees ? " " + b.annee : ""} (${b.lignes.length} marque${b.lignes.length > 1 ? "s" : ""})`).join(", ")}`);
+  }
+  /* ---------- Tableau « Directeurs de département » (Administrateur) ----------
+     Une ligne par mal trié avec « Marque ajoutée : Oui » : Date | Étage | Marque | Magasin | Anomalies (photos) |
+     Commentaire | Directeur de département. Directeur choisi selon le magasin et l'étage (config.js → directeurs).
+     Période : une semaine (lundi → dimanche) ou un mois au choix. */
+  const directeurDe = r => {
+    const d = (CFG.directeurs || []).find(x => x.magasin === r.magasin && (!x.niveaux || x.niveaux.includes(r.niveau)));
+    return d ? d.nom : "";
+  };
+  const etageCourt = n => /^Étage (\d+)$/.test(n) ? n.slice(6) : /^Sous-sol (\d+)$/.test(n) ? "-" + n.slice(9) : n;
+  const MOISmin = MOIS.map(m => m.toLowerCase());
+  function periodesDirecteurs() {
+    const out = [], now = new Date();
+    const lundi = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+    for (let k = 0; k < 26; k++) {
+      const a = new Date(lundi.getFullYear(), lundi.getMonth(), lundi.getDate() - 7 * k), b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 7);
+      const iw = isoWeekYear(a), dim = new Date(b.getTime() - 86400000);
+      out.push({ id: `S${iw.y}-${pad(iw.w)}`, groupe: "Semaines", a, b, fichier: `${iw.y}-S${pad(iw.w)}`,
+        label: `Semaine ${iw.w} — du ${a.getDate()} ${MOISmin[a.getMonth()]} au ${dim.getDate()} ${MOISmin[dim.getMonth()]} ${dim.getFullYear()}` });
+    }
+    for (let k = 0; k < 12; k++) {
+      const a = new Date(now.getFullYear(), now.getMonth() - k, 1), b = new Date(a.getFullYear(), a.getMonth() + 1, 1);
+      out.push({ id: `M${a.getFullYear()}-${pad(a.getMonth() + 1)}`, groupe: "Mois", a, b, fichier: `${a.getFullYear()}-${pad(a.getMonth() + 1)}`,
+        label: `${MOIS[a.getMonth()]} ${a.getFullYear()}` });
+    }
+    return out;
+  }
+  function tableauDirecteursBloc() {
+    const P = periodesDirecteurs(), cur = S.dirPeriode && P.some(p => p.id === S.dirPeriode) ? S.dirPeriode : P[0].id;
+    const grp = g => `<optgroup label="${g}">${P.filter(p => p.groupe === g).map(p => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${h(p.label)}</option>`).join("")}</optgroup>`;
+    return `<div class="card mt dir-bloc"><div class="row filters">
+        <span class="label">📋 Tableau directeurs de département</span>
+        <select id="dir-periode" aria-label="Semaine ou mois">${grp("Semaines")}${grp("Mois")}</select>
+        <button class="btn" data-act="dirxlsx">⬇ Extraire en Excel</button>
+      </div></div>`;
+  }
+  async function exportDirecteurs() {
+    const sel = document.getElementById("dir-periode");
+    const per = periodesDirecteurs().find(p => p.id === (sel && sel.value)) || periodesDirecteurs()[0];
+    S.dirPeriode = per.id;
+    const t0 = per.a.getTime(), t1 = per.b.getTime(), rows = [];
+    S.records.forEach(r => {
+      const d = new Date(r.date), t = d.getTime();
+      if (t < t0 || t >= t1) return;
+      // une seule photo par anomalie (la première) : la colonne « Anomalies » doit correspondre au tableau de référence
+      r.items.forEach(i => { if (i.statut === "mal" && i.marque === true) rows.push({ r, i: { dechet: i.dechet, photos: undefined, nphotos: nbItemPhotos(i) ? 1 : 0, src: i }, d }); });
+    });
+    if (!rows.length) return toast(`Aucun mal trié avec « Marque ajoutée : Oui » — ${per.label}.`);
+    rows.sort((x, y) => x.d - y.d);
+    if (!(await loadAllPhotos(rows, "du tableau directeurs"))) return;
+    // mêmes colonnes que le tableau de référence (copier-coller direct) : la 1re colonne (date) n'a pas de titre
+    const T = { fill: "F4CCCC", bold: true, center: true, border: true }, C = { center: true, border: true };
+    const head = ["", "Etage", "Marque", "Magasin", "Anomalies", "Commentaire", "Directeur de departement"].map(v => ({ v, st: T }));
+    const images = [], lignes = [];
+    for (let k = 0; k < rows.length; k++) {
+      const { r, i, d } = rows[k];
+      if (nbItemPhotos(i)) {
+        const im = await decodeImage(rows[k].srcs[0]);
+        if (!im) { alert("Une photo est illisible : le fichier n'a pas été créé."); return; }
+        images.push(Object.assign(im, { row: k + 1, col: 4 }));
+      }
+      lignes.push([frDate(d), etageCourt(r.niveau), i.src.marque_nom || "", (CFG.codesMagasin || {})[r.magasin] || r.magasin,
+        "", i.src.commentaire || "", directeurDe(r)].map(v => ({ v, st: C })));
+    }
+    const der = rows.length + 1;
+    const listes = [
+      { ref: `D2:D${der}`, valeurs: Object.values(CFG.codesMagasin || {}) },
+      { ref: `G2:G${der}`, valeurs: (CFG.directeurs || []).map(x => x.nom) }
+    ].filter(l => l.valeurs.length);
+    const widths = [12, 9, 26, 14, 34, 30, 28];
+    download(XlsxWriter.build([head, ...lignes], "Anomalies", { images, listes, widths }), `anomalies-directeurs-${per.fichier}.xlsx`);
+    toast(`Fichier Excel prêt : ${rows.length} anomalie(s) — ${per.label}`);
   }
   const colLetter = i => { let s = ""; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
 
@@ -1549,8 +1622,37 @@
     return markYears(out);
   }
 
+  /* Périodes du tableau de bord : 1 semaine (par jour), 1 mois et 3 mois (par semaine), 1 an (par mois). */
+  const DASH_PER = {
+    "1s": { label: "1 semaine", unite: "jour",    cur: "Aujourd'hui",       detail: "Détail jour par jour",       titre: "Taux de tri par jour",          prec: "au jour précédent",    encours: "La journée en cours n'est pas terminée" },
+    "1m": { label: "1 mois",    unite: "semaine", cur: "Semaine en cours",  detail: "Détail semaine par semaine", titre: "Taux de tri hebdomadaire",      prec: "à la semaine précédente", encours: "La semaine en cours n'est pas terminée" },
+    "3m": { label: "3 mois",    unite: "semaine", cur: "Semaine en cours",  detail: "Détail semaine par semaine", titre: "Taux de tri hebdomadaire",      prec: "à la semaine précédente", encours: "La semaine en cours n'est pas terminée" },
+    "1a": { label: "1 an",      unite: "mois",    cur: "Mois en cours",     detail: "Détail mois par mois",       titre: "Taux de tri mensuel",           prec: "au mois précédent",    encours: "Le mois en cours n'est pas terminé" }
+  };
+  const JOURS = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+  function dashBuckets(per) {
+    const now = new Date(), out = [];
+    if (per === "1s") {   // les 7 derniers jours, aujourd'hui compris
+      for (let i = 6; i >= 0; i--) {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i), end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
+        out.push({ start, end, label: JOURS[start.getDay()], sub: `${pad(start.getDate())}/${pad(start.getMonth() + 1)}` });
+      }
+      return out;
+    }
+    if (per === "1a") {   // les 12 derniers mois, mois en cours compris
+      for (let i = 11; i >= 0; i--) {
+        const start = new Date(now.getFullYear(), now.getMonth() - i, 1), end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+        out.push({ start, end, label: ["Janv.", "Févr.", "Mars", "Avr.", "Mai", "Juin", "Juil.", "Août", "Sept.", "Oct.", "Nov.", "Déc."][start.getMonth()], sub: String(start.getFullYear()) });
+      }
+      return out;
+    }
+    return lastWeeks(per === "1m" ? 5 : 13);
+  }
+
   function dashData() {
-    const D = S.dash, weeks = lastWeeks(D.weeks);
+    const D = S.dash;
+    if (!DASH_PER[D.per]) D.per = "3m";
+    const weeks = dashBuckets(D.per);
     const t0 = weeks[0].start.getTime();
     const per = {}; ALL_PALIERS.forEach(p => (per[p.key] = weeks.map(() => ({ ...zero(), n: 0 }))));
     const all = weeks.map(() => ({ ...zero(), n: 0 }));
@@ -1598,7 +1700,7 @@
     const series = [...pals, { key: "__all", nom: "Tous paliers", full: "Tous paliers", color: isDark() ? "#E8E6E1" : "#1C2321", rates: overall }];
     const shown = dashShown();
     const vis = series.filter(s => shown[s.key]);
-    const n = weeks.length, cur = n - 1, prev = n - 2;
+    const n = weeks.length, cur = n - 1, prev = n - 2, U = DASH_PER[D.per];
 
     const kpi = (key, name, color, rates, title) => {
       const [a, b] = firstLast(rates);
@@ -1609,7 +1711,7 @@
         <div class="kpi-name">${color ? `<span class="key" style="background:${color}"></span>` : ""}${h(name)}</div>
         <b class="rate ${rateCls(v)}">${rateTxt(v)}${li >= 0 && li !== cur ? `<small> en ${weeks[li].label}</small>` : ""}</b>
         <div>${li < 0 ? `<span class="delta flat">aucun contrôle</span>` : vs}</div>
-        <div class="kpi-sub">Sur ${n} sem. : ${a === null ? "—" : deltaHtml(b, a)}</div>
+        <div class="kpi-sub">Sur ${U.label} : ${a === null ? "—" : deltaHtml(b, a)}</div>
         <span class="kpi-check">${shown[key] ? "✓ sur le graphique" : "+ ajouter au graphique"}</span>
       </button>`;
     };
@@ -1635,21 +1737,21 @@
       </div>
       <div class="row mt filters">
         <span class="label">Période</span>
-        ${[8, 12, 26, 52].map(w => `<button class="pill round ${D.weeks === w ? "on" : ""}" data-act="weeks" data-w="${w}">${w} semaines</button>`).join("")}
+        ${Object.entries(DASH_PER).map(([k, p]) => `<button class="pill round ${D.per === k ? "on" : ""}" data-act="dper" data-p="${k}">${p.label}</button>`).join("")}
       </div>
       <div class="row mt filters">
         <select id="dash-agent" aria-label="Agent">${opt("", "Tous agents", D.agent)}${agents().map(a => opt(a, a, D.agent)).join("")}</select>
         <select id="dash-dechet" aria-label="Poubelle">${opt("", "Toutes poubelles", D.dechet)}${ALL_DECHETS.map(d => opt(d, d, D.dechet)).join("")}</select>
       </div>
 
-      <div class="label mt2">Semaine en cours (${weeks[cur].label}) — taux de tri et évolution</div>
+      <div class="label mt2">${U.cur} (${weeks[cur].label} ${weeks[cur].sub}) — taux de tri et évolution</div>
       <div class="kpis mt">
         ${series.map(s => kpi(s.key, s.nom, s.color, s.rates, s.full)).join("")}
       </div>
 
       <section class="card mt chart-card">
         <div class="card-head" style="border:0;padding-bottom:4px">
-          <h2 style="font-family:var(--sans);font-size:13px">Taux de tri hebdomadaire par palier${D.dechet ? " · " + h(D.dechet) : ""}</h2>
+          <h2 style="font-family:var(--sans);font-size:13px">${U.titre} par palier${D.dechet ? " · " + h(D.dechet) : ""}</h2>
         </div>
         <div class="chooser">
           <span class="label">Courbes affichées · ${vis.length}/${series.length}</span>
@@ -1667,11 +1769,11 @@
         <div class="chart" id="chart"></div>
       </section>
 
-      <div class="label mt2">Détail semaine par semaine</div>
+      <div class="label mt2">${U.detail}</div>
       <section class="card mt">${vis.length ? `<div class="matrix-wrap">${table}</div>` : `<div class="empty">Aucune courbe sélectionnée.</div>`}</section>
       <p class="label mt" style="letter-spacing:.04em;text-transform:none;line-height:1.5">
-        Taux de tri = bien triés ÷ (bien triés + mal triés). ▲ hausse / ▼ baisse par rapport à la semaine précédente, en points.
-        La semaine en cours n'est pas terminée : son taux peut encore bouger.
+        Taux de tri = bien triés ÷ (bien triés + mal triés). ▲ hausse / ▼ baisse par rapport ${U.prec}, en points.
+        ${U.encours} : son taux peut encore bouger.
       </p>`;
 
     document.getElementById("dash-agent").onchange = e => { D.agent = e.target.value; renderDashboard(); };
@@ -1692,7 +1794,7 @@
     const Y = v => m.t + ph - (v / 100) * ph;
     const step = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(pw / 46))));
 
-    let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Courbe hebdomadaire du taux de tri par palier">`;
+    let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Courbe du taux de tri par palier">`;
     [0, 25, 50, 75, 100].forEach(v => {
       svg += `<line x1="${m.l}" x2="${m.l + pw}" y1="${Y(v)}" y2="${Y(v)}" stroke="${isDark() ? "#2A3230" : "#ECE9E2"}" stroke-width="1"/>`;
       svg += `<text x="${m.l - 6}" y="${Y(v) + 3}" text-anchor="end" class="ax">${v}%</text>`;
@@ -1778,7 +1880,8 @@
     const rows = [["Palier", ...weeks.map(w => `${w.label} (${w.sub})`)]];
     series.forEach(s => rows.push([s.full, ...s.rates.map(pct)]));
     rows.push(["Tous paliers", ...overall.map(pct)]);
-    download(XlsxWriter.build(rows, "Taux hebdomadaire"), `taux-hebdo-paliers-${stamp()}.xlsx`);
+    const per = DASH_PER[S.dash.per] || DASH_PER["3m"];
+    download(XlsxWriter.build(rows, per.titre.replace("Taux de tri ", "Taux ")), `taux-paliers-${per.label.replace(" ", "")}-${stamp()}.xlsx`);
   }
 
   /* ---------------- Gestion des comptes (admin) ---------------- */
@@ -2036,7 +2139,7 @@
     const el = e.target.closest("[data-act]");
     if (!el || el.tagName === "INPUT") return;
     const a = el.dataset.act;
-    const NEED = { marquesxlsx: "export", send: "controle", set: "controle", marque: "controle", retry: "controle", reset: "controle", csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
+    const NEED = { dirxlsx: "directeurs", marquesxlsx: "export", send: "controle", set: "controle", marque: "controle", retry: "controle", reset: "controle", csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
     if (NEED[a] && !can(NEED[a])) { toast("Action non autorisée pour ton compte."); return; }
     switch (a) {
       case "go": location.hash = el.dataset.to; break;
@@ -2129,7 +2232,7 @@
         else { ta.select(); document.execCommand("copy"); done(); }
         break;
       }
-      case "weeks": S.dash.weeks = +el.dataset.w; renderDashboard(); break;
+      case "dper": S.dash.per = el.dataset.p; renderDashboard(); break;
       case "toggleserie": { const sh = { ...dashShown() }; sh[el.dataset.k] = !sh[el.dataset.k]; setShown(sh); break; }
       case "soloserie": setShown({ [el.dataset.k]: true }); break;
       case "showall": { const sh = { __all: true }; ALL_PALIERS.forEach(p => (sh[p.key] = true)); setShown(sh); break; }
@@ -2152,6 +2255,7 @@
       case "csv": exportCsv(); break;
       case "xlsx": exportXlsx(); break;
       case "marquesxlsx": exportMarques(); break;
+      case "dirxlsx": exportDirecteurs(); break;
       case "pdf": exportPdf(); break;
       case "month": {
         const m = S.sup.m + +el.dataset.d;
