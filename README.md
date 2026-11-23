@@ -11,7 +11,7 @@ Application web de contrôle du tri sélectif par magasin, palier, étage et typ
 
 ## Logo et icône
 
-Le logo « Dôme et paliers » est dans le dossier `assets/` : `logo.svg` (icône), `logo-marque.svg` (barre du haut) et les icônes PNG pour l'écran d'accueil. Sur téléphone, « Ajouter à l'écran d'accueil » crée une icône avec ce logo.
+Le logo « Dôme et paliers » est dans le dossier `tri-selectif` : `logo.svg` (icône), `logo-marque.svg` (barre du haut) et les icônes PNG pour l'écran d'accueil. Sur téléphone, « Ajouter à l'écran d'accueil » crée une icône avec ce logo.
 
 ## Mode sombre
 
@@ -22,7 +22,7 @@ Le bouton 🌙 / ☀️ en haut à droite passe l'appli en mode sombre ou clair,
 Les contrôles, les photos et les comptes sont enregistrés dans une base de données en ligne (Supabase). Tous les appareils voient donc les mêmes données : un contrôle envoyé depuis le téléphone d'un agent apparaît dans le Suivi des responsables.
 
 - La base se prépare une seule fois, avec le script `tri-selectif-supabase.sql` (Supabase > SQL Editor > Run). Ne le mets pas sur GitHub : il contient les mots de passe de départ.
-- L'adresse du projet et la clé **publique** sont dans `js/config.js` (partie `supabase`). Ne mets jamais la clé « secret » ou « service_role » dans ce fichier.
+- L'adresse du projet et la clé **publique** sont dans `config.js` (partie `supabase`). Ne mets jamais la clé « secret » ou « service_role » dans ce fichier.
 - **Sans réseau** (sous-sol, par exemple), la saisie et les envois sont gardés dans le grand stockage du téléphone (IndexedDB), testé avec 100 photos et plus. Ils repartent automatiquement dès le retour du réseau. Un bandeau « en attente d'envoi » l'indique.
 
 ## Comptes et accès
@@ -64,10 +64,18 @@ Les contrôles, les photos et les comptes sont enregistrés dans une base de don
 
 ## Adapter à ton site
 
-Tout se règle dans **`js/config.js`** : le nom de l'organisation, les magasins, les paliers, les étages, les types de déchets, et les poubelles en plus sur certains étages seulement (`dechetsSupplementaires`). Pour modifier ce fichier sur GitHub, ouvre-le, clique sur le crayon ✏️, puis sur **Commit changes**.
+Tout se règle dans **`config.js`** : le nom de l'organisation, les magasins, les paliers, les étages, les types de déchets, et les poubelles en plus sur certains étages seulement (`dechetsSupplementaires`). Pour modifier ce fichier sur GitHub, ouvre-le, clique sur le crayon ✏️, puis sur **Commit changes**.
 
 ## Où sont stockées les données ?
 
 Elles sont enregistrées dans le navigateur de chaque appareil (localStorage). Chaque téléphone ou ordinateur a donc son propre historique, et vider les données du navigateur l'efface. Pense à exporter régulièrement en CSV.
 
-Pour partager un historique commun entre plusieurs agents, il faut brancher une base de données en ligne (par exemple Supabase ou Firebase). L'appli est prévue pour ça : seul le bloc « Stockage » de `js/app.js` est à remplacer.
+Pour partager un historique commun entre plusieurs agents, il faut brancher une base de données en ligne (par exemple Supabase ou Firebase). L'appli est prévue pour ça : seul le bloc « Stockage » de `app.js` est à remplacer.
+
+## Mettre l'appli à jour sur GitHub
+
+Tous les fichiers de l'appli sont rangés à plat dans le dossier `tri-selectif`, sans sous-dossier.
+1. Sur GitHub, clique sur le dossier **tri-selectif** pour entrer dedans.
+2. **Add file → Upload files**.
+3. Glisse tous les fichiers du zip (sélectionne-les tous avec Ctrl+A), puis clique sur **Commit changes**.
+4. Une à deux minutes plus tard, vérifie la version en bas de l'appli.
