@@ -326,7 +326,7 @@
     document.getElementById("hdr-actions").innerHTML =
       `<button class="hbtn theme-btn" data-act="theme" title="${dark ? "Passer en mode clair" : "Passer en mode sombre"}" aria-label="${dark ? "Mode clair" : "Mode sombre"}">${dark ? "☀️" : "🌙"}</button>` + actions;
   }
-  // Mode sombre : réglé par js/theme.js au chargement ; le bouton mémorise le choix sur l'appareil.
+  // Mode sombre : réglé par theme.js au chargement ; le bouton mémorise le choix sur l'appareil.
   const isDark = () => document.documentElement.getAttribute("data-theme") === "dark";
   const userBox = () => S.user
     ? `<button class="hbtn huser" data-act="logout"><span><small>${h(S.user)} · ${h(ROLES[S.role].label)}</small>Se déconnecter</span></button>` : "";
@@ -398,7 +398,7 @@
     $app.className = "";
     $app.innerHTML = `
       <form class="card login" id="login-form" autocomplete="on">
-        <img class="login-logo" src="assets/logo.svg?v=20261123-0110" alt="Logo Tri sélectif" width="72" height="72">
+        <img class="login-logo" src="logo.svg?v=20261123-0115" alt="Logo Tri sélectif" width="72" height="72">
         <div class="label">Organisation · ${h(CFG.organisation)}</div>
         <h2>Connexion</h2>
         <label class="label" for="login-id">Identifiant</label>
@@ -1994,7 +1994,7 @@
         <div style="padding:12px">
           <ol class="steps">
             <li>Clique sur <b>Copier le bloc</b>.</li>
-            <li>Sur GitHub, ouvre <b>js/config.js</b> puis le crayon ✏️.</li>
+            <li>Sur GitHub, ouvre <b>config.js</b> (dans le dossier tri-selectif) puis le crayon ✏️.</li>
             <li>Remplace tout le bloc <code>comptes: [ … ],</code> par celui copié, puis <b>Commit changes</b>.</li>
             <li>Une à deux minutes plus tard, les comptes sont actifs sur tous les appareils.</li>
           </ol>
@@ -2227,7 +2227,7 @@
       }
       case "acccopy": {
         const ta = document.getElementById("acc-code");
-        const done = () => toast("Bloc copié : colle-le dans js/config.js sur GitHub");
+        const done = () => toast("Bloc copié : colle-le dans config.js sur GitHub");
         if (navigator.clipboard) navigator.clipboard.writeText(ta.value).then(done, () => { ta.select(); document.execCommand("copy"); done(); });
         else { ta.select(); document.execCommand("copy"); done(); }
         break;
