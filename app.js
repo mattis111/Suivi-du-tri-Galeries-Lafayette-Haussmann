@@ -161,7 +161,12 @@
   const ACCOUNTS = CFG.comptes || [];
   const findAccount = id => ACCOUNTS.find(a => a.identifiant.toLowerCase() === String(id || "").trim().toLowerCase());
   // En ligne, pas de données de démo : elles se mélangeraient aux vrais contrôles de tout le monde.
-  const can = perm => !(perm === "demo" && ONLINE) && !!(S.role && ROLES[S.role] && ROLES[S.role].perms.includes(perm));
+  const can = perm => !(perm === "demo" && ONLINE) && !!(S.role && ROLES[S.role] && (ROLES[S.role].perms.includes(perm)
+    || (perm === "exportbase" && ROLES[S.role].perms.includes("export"))
+    || (S.voirHisto && (perm === "suivi" || perm === "exportbase" || perm === "supervision"))));
+  // agent autorisé à consulter l'historique (ex. agents Samsic) : onglets Historique et Supervision (de leurs contrôles
+  // seulement : le serveur ne leur envoie que ceux qu'ils ont le droit de voir) + CSV / PDF / Excel des mal triés
+  const histoSeul = () => !!S.voirHisto && !(ROLES[S.role] && ROLES[S.role].perms.includes("suivi"));
   async function sha256(text) {
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
     return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
@@ -171,6 +176,7 @@
   function openSession(acc) {
     S.user = acc.nom || acc.identifiant; S.role = acc.role; S.ident = acc.identifiant; S.jeton = acc.jeton || null;
     S.doitChanger = !!acc.doit_changer;
+    S.voirHisto = S.role === "agent" && !!acc.voir_historique;
   }
 
   /* ---------------- Base de données en ligne (Supabase) ---------------- */
@@ -220,7 +226,7 @@
     }
   }
   function closeSession() {
-    S.user = S.role = S.ident = S.jeton = null; S.doitChanger = false;
+    S.user = S.role = S.ident = S.jeton = null; S.doitChanger = false; S.voirHisto = false;
     store.del("session"); big.del("cache"); store.del("syncAt");
     S.records = ONLINE ? [] : store.get("records", []);
     photoCache = {};
@@ -354,7 +360,7 @@
     if (!S.user) return renderLogin();
     if (S.doitChanger || r === "mot-de-passe") return renderChangePassword(S.doitChanger);
     if (r.startsWith("suivi") && can("suivi")) {
-      const tab = r.includes("supervision") && can("supervision") ? "supervision" : r.includes("analyse") ? "analyse" : r.includes("tableau") ? "dashboard"
+      const tab = r.includes("supervision") && can("supervision") ? "supervision" : histoSeul() ? "historique" : r.includes("analyse") ? "analyse" : r.includes("tableau") ? "dashboard"
         : r.includes("comptes") && can("comptes") ? "comptes" : "historique";
       return renderSuivi(tab);
     }
@@ -413,7 +419,7 @@
     $app.className = "";
     $app.innerHTML = `
       <form class="card login" id="login-form" autocomplete="on">
-        <img class="login-logo" src="logo.svg?v=20261125-2330" alt="Logo Tri sélectif" width="72" height="72">
+        <img class="login-logo" src="logo.svg?v=20261125-2359" alt="Logo Tri sélectif" width="72" height="72">
         <div class="label">Organisation · ${h(CFG.organisation)}</div>
         <h2>Connexion</h2>
         <label class="label" for="login-id">Identifiant</label>
@@ -540,12 +546,12 @@
         `<button class="choice ${k} ${v.statut === k ? "on" : ""}" data-act="set" data-d="${h(d)}" data-s="${k}"><i>${s.icon}</i>${s.label}</button>`).join("");
       const extra = v.statut === "mal" ? `
         <div class="mal-extra">
-          <div class="marque-row">
+          ${SEUL_GL5 ? "" : `<div class="marque-row">
             <span class="marque-label">Marque ajoutée</span>
             <button class="choice marque ${v.marque === true ? "on oui" : ""}" data-act="marque" data-d="${h(d)}" data-v="oui" aria-pressed="${v.marque === true}">Oui</button>
             <button class="choice marque ${v.marque === false ? "on non" : ""}" data-act="marque" data-d="${h(d)}" data-v="non" aria-pressed="${v.marque === false}">Non</button>
-          </div>
-          ${v.marque === true ? `<input type="text" class="marque-nom" maxlength="60" list="marques-connues" autocomplete="off" placeholder="Nom de la marque (ex. Dior)" aria-label="Nom de la marque pour ${h(d)}" value="${h(v.marque_nom || "")}" data-act="marquenom" data-d="${h(d)}">` : ""}
+          </div>`}
+          ${v.marque === true && !SEUL_GL5 ? `<input type="text" class="marque-nom" maxlength="60" list="marques-connues" autocomplete="off" placeholder="Nom de la marque (ex. Dior)" aria-label="Nom de la marque pour ${h(d)}" value="${h(v.marque_nom || "")}" data-act="marquenom" data-d="${h(d)}">` : ""}
           <input type="text" maxlength="300" placeholder="Commentaire (ex. carton non plié)" value="${h(v.commentaire || "")}" data-act="comment" data-d="${h(d)}">
           <div class="note-photos">
             ${itemPhotosOf(v).map((src, n) => safeImg(src) ? `<span class="np"><img src="${safeImg(src)}" alt="Photo ${n + 1}" data-act="zoom"><button class="np-del" data-act="rmphoto" data-d="${h(d)}" data-n="${n}" title="Retirer cette photo">×</button></span>` : "").join("")}
@@ -837,14 +843,14 @@
 
   /* ---------------- Suivi : historique & supervision ---------------- */
   function renderSuivi(tab) {
-    header(S.role === "spectateur" ? "Consultation" : "Supervision", "Suivi — " + CFG.organisation,
+    header(S.role === "spectateur" || histoSeul() ? "Consultation" : "Supervision", "Suivi — " + (SEUL_GL5 && ORG_RESTREINTE ? ORG_RESTREINTE : CFG.organisation),
       `${can("controle") ? `<button class="hbtn" data-act="go" data-to="#/controle">← Contrôle</button>` : ""}${userBox()}`);
     $app.className = "wide";
     $app.innerHTML = `
       <div class="row">
         <button class="pill round dark ${tab === "historique" ? "on" : ""}" data-act="go" data-to="#/suivi/historique">Historique</button>
-        <button class="pill round dark ${tab === "dashboard" ? "on" : ""}" data-act="go" data-to="#/suivi/tableau">📊 Tableau de bord</button>
-        <button class="pill round dark ${tab === "analyse" ? "on" : ""}" data-act="go" data-to="#/suivi/analyse">📈 Analyse par étage</button>
+        ${histoSeul() ? "" : `<button class="pill round dark ${tab === "dashboard" ? "on" : ""}" data-act="go" data-to="#/suivi/tableau">📊 Tableau de bord</button>
+        <button class="pill round dark ${tab === "analyse" ? "on" : ""}" data-act="go" data-to="#/suivi/analyse">📈 Analyse par étage</button>`}
         ${can("supervision") ? `<button class="pill round dark ${tab === "supervision" ? "on" : ""}" data-act="go" data-to="#/suivi/supervision">📅 Supervision</button>` : ""}
         ${can("comptes") ? `<button class="pill round dark ${tab === "comptes" ? "on" : ""}" data-act="go" data-to="#/suivi/comptes">👥 Comptes</button>` : ""}
       </div>
@@ -897,11 +903,11 @@
     document.getElementById("suivi-body").innerHTML = `
       <div class="row between mt2">
         <button class="btn" data-act="refresh">↻ Actualiser</button>
-        ${can("export") ? `<div class="row">
+        ${can("exportbase") ? `<div class="row">
           <button class="btn" data-act="csv">⬇ Exporter CSV</button>
           <button class="btn" data-act="pdf">📄 Mal triés (PDF)</button>
           <button class="btn" data-act="xlsx">📗 Mal triés (Excel)</button>
-          <button class="btn" data-act="marquesxlsx">🏷 Marques (Excel)</button>
+          ${can("export") ? `<button class="btn" data-act="marquesxlsx">🏷 Marques (Excel)</button>` : ""}
         </div>` : `<span class="label" style="letter-spacing:.06em">👁 Consultation seule</span>`}
       </div>
       ${can("directeurs") ? tableauDirecteursBloc() : ""}
@@ -1931,7 +1937,7 @@
           <thead><tr><th>Identifiant</th><th>Nom affiché</th><th>Rôle</th><th title="Accès à la partie réservée GL5 Gourmet">GL5</th><th></th></tr></thead>
           <tbody>${onlineAccounts.map(a => `<tr>
             <th>${h(a.identifiant)}${a.identifiant === S.ident ? ` <span class="label">(toi)</span>` : ""}</th>
-            <td>${h(a.nom)}${a.doit_changer ? ` <span class="label" title="Mot de passe provisoire pas encore changé">· provisoire</span>` : ""}</td><td><span class="role-tag ${ROLES[a.role] ? a.role : ""}">${h(ROLES[a.role] ? ROLES[a.role].label : a.role)}</span></td>
+            <td>${h(a.nom)}${a.doit_changer ? ` <span class="label" title="Mot de passe provisoire pas encore changé">· provisoire</span>` : ""}</td><td><span class="role-tag ${ROLES[a.role] ? a.role : ""}">${h(ROLES[a.role] ? ROLES[a.role].label : a.role)}</span>${a.role === "agent" && a.voir_historique ? ` <span class="tag" title="Peut consulter l'historique et l'exporter">+ historique</span>` : ""}</td>
             <td>${a.role !== "admin" && a.uniquement_gl5 ? `<span class="tag mal" title="Ne voit que GL5 Gourmet">GL5 seul</span>` : a.role === "admin" || a.acces_gl4 ? `<span class="tag bien" title="Voit la partie réservée GL5 Gourmet">✓ GL5</span>` : `<span class="label">—</span>`}</td>
             <td style="white-space:nowrap"><button class="linkbtn" data-act="oaccedit" data-id="${h(a.identifiant)}">Modifier</button>
               ${a.identifiant === S.ident ? "" : `· <button class="linkbtn danger" data-act="oaccdel" data-id="${h(a.identifiant)}">Supprimer</button>`}</td>
@@ -1944,6 +1950,7 @@
           <label>Identifiant<input id="acc-id" required value="${ed ? h(ed.identifiant) : ""}" ${ed ? "readonly" : ""} autocapitalize="none" placeholder="ex. samir"></label>
           <label>Nom affiché<input id="acc-nom" required value="${ed ? h(ed.nom) : ""}" placeholder="ex. Samir"></label>
           <label>Rôle<select id="acc-role">${roleOpt(ed ? ed.role : "agent")}</select></label>
+          <label class="acc-gl4"><span><input type="checkbox" id="acc-histo" ${ed && ed.voir_historique ? "checked" : ""}> Agent : peut consulter l'historique (et l'exporter en CSV / PDF / Excel)</span></label>
           <label>Partie GL5 Gourmet<select id="acc-gl5">
             <option value="non" ${!ed || (!ed.acces_gl4 && !ed.uniquement_gl5) ? "selected" : ""}>Pas d'accès</option>
             <option value="oui" ${ed && ed.acces_gl4 && !ed.uniquement_gl5 ? "selected" : ""}>Accès en plus des autres magasins</option>
@@ -1969,7 +1976,8 @@
       try {
         await call("tri_compte_enregistrer", { p_identifiant: id, p_nom: document.getElementById("acc-nom").value,
           p_role: document.getElementById("acc-role").value, p_mot_de_passe: document.getElementById("acc-pw").value || null,
-          p_acces_gl4: document.getElementById("acc-gl5").value !== "non", p_uniquement_gl5: document.getElementById("acc-gl5").value === "seul" });
+          p_acces_gl4: document.getElementById("acc-gl5").value !== "non", p_uniquement_gl5: document.getElementById("acc-gl5").value === "seul",
+          p_voir_historique: document.getElementById("acc-histo").checked });
         toast(ed ? "Compte modifié" : "Compte créé — il peut se connecter tout de suite");
         renderComptesOnline(null, true);
       } catch (ex) { toast(errMsg(ex)); btn.disabled = false; }
@@ -2184,7 +2192,7 @@
     const el = e.target.closest("[data-act]");
     if (!el || el.tagName === "INPUT") return;
     const a = el.dataset.act;
-    const NEED = { dirxlsx: "directeurs", marquesxlsx: "export", send: "controle", set: "controle", marque: "controle", retry: "controle", reset: "controle", csv: "export", xlsx: "export", pdf: "export", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
+    const NEED = { dirxlsx: "directeurs", marquesxlsx: "export", send: "controle", set: "controle", marque: "controle", retry: "controle", reset: "controle", csv: "exportbase", xlsx: "exportbase", pdf: "exportbase", anaxlsx: "export", dashxlsx: "export", demo: "demo", wipe: "wipe", accedit: "comptes", acccancel: "comptes", accdel: "comptes", acccopy: "comptes", oaccedit: "comptes", oacccancel: "comptes", oaccdel: "comptes" };
     if (NEED[a] && !can(NEED[a])) { toast("Action non autorisée pour ton compte."); return; }
     switch (a) {
       case "go": location.hash = el.dataset.to; break;
@@ -2353,7 +2361,7 @@
     if (ONLINE && S.jeton) {
       call("tri_moi").then(me => {
         if (accesChange(me)) { store.set("session", Object.assign({}, me, { jeton: S.jeton })); location.reload(); return; }
-        if (me.role !== S.role || me.nom !== S.user) { openSession(Object.assign({}, me, { jeton: S.jeton })); store.set("session", Object.assign({}, me, { jeton: S.jeton })); route(); }
+        if (me.role !== S.role || me.nom !== S.user || (me.role === "agent" && !!me.voir_historique !== S.voirHisto)) { openSession(Object.assign({}, me, { jeton: S.jeton })); store.set("session", Object.assign({}, me, { jeton: S.jeton })); route(); }
       }).catch(() => {});
       syncAll(!store.get("syncAt", null));
     }
