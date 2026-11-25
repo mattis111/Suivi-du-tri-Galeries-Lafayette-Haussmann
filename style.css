@@ -570,3 +570,11 @@ html[data-theme="dark"] .loading { background: rgba(0, 0, 0, .65); }
 .dir-bloc { padding: 12px 14px; }
 .dir-bloc .row { align-items: center; gap: 10px; }
 .dir-bloc select { max-width: 100%; }
+
+/* Case « Accès GL4 » dans le formulaire des comptes */
+.acc-gl4 { display: flex; align-items: flex-end; }
+.acc-gl4 span { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 9px 0; text-transform: none; letter-spacing: 0; }
+.acc-gl4 input { width: 18px; height: 18px; margin: 0; }
+
+/* Précision sous le nom de l'étage (ex. « Pilier 711 » pour GL5 Gourmet) */
+.floor .floor-sub { display: block; font-family: var(--mono); font-size: 8.5px; color: var(--muted); white-space: nowrap; margin: 1px 0 2px; }

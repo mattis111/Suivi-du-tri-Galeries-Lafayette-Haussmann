@@ -3,10 +3,25 @@
   "use strict";
 
   const CFG = window.APP_CONFIG;
+  /* Partie réservée (magasins « restreint », ex. GL5 Gourmet) : on ne garde ces magasins que si le compte connecté
+     sur cet appareil a l'accès (« acces_gl4 », donné par le serveur). Sinon ils n'apparaissent nulle part.
+     Si l'accès change (connexion d'un autre compte, accès modifié), la page est rechargée. */
+  const SESS0 = (() => { try { return JSON.parse(localStorage.getItem("tri.session") || "null") || {}; } catch (e) { return {}; } })();
+  const ACCES_GL4 = !!(SESS0.jeton && SESS0.acces_gl4);
+  // compte limité à la partie réservée (ex. agents Samsic) : seulement GL5 Gourmet
+  const SEUL_GL5 = !!(SESS0.jeton && SESS0.uniquement_gl5);
+  const MAGS_RESTREINTS = CFG.magasins.filter(m => m.restreint).map(m => m.nom);
+  if (!ACCES_GL4) CFG.magasins = CFG.magasins.filter(m => !m.restreint);
+  else if (SEUL_GL5) CFG.magasins = CFG.magasins.filter(m => m.restreint);
+  const accesChange = a => !!a.acces_gl4 !== ACCES_GL4 || !!a.uniquement_gl5 !== SEUL_GL5;
+  const visibleKey = k => !MAGS_RESTREINTS.includes(k.split("|")[0]) || ACCES_GL4;
   const DECHETS = CFG.dechets;
   // Poubelles en plus sur certains niveaux (voir config.js > dechetsSupplementaires).
   const EXTRA = CFG.dechetsSupplementaires || {};
+  // Liste complète de poubelles propre à un niveau (voir config.js > dechetsParNiveau)
+  const PAR_NIVEAU = Object.fromEntries(Object.entries(CFG.dechetsParNiveau || {}).filter(([k]) => visibleKey(k)));
   const dechetsOf = (m, p, n) => {
+    if (PAR_NIVEAU[`${m}|${p}|${n}`]) return PAR_NIVEAU[`${m}|${p}|${n}`].slice();
     const extra = EXTRA[`${m}|${p}|${n}`] || [];
     const i = DECHETS.indexOf("Autre");
     return i < 0 ? DECHETS.concat(extra) : [...DECHETS.slice(0, i), ...extra, ...DECHETS.slice(i)];
@@ -45,7 +60,7 @@
   const notePhotosOf = v => (v && Array.isArray(v.__photos) ? v.__photos : []);
   // Nombre de photos « Autre » d'un contrôle (tableau d'images en attente, ou nombre venant du serveur)
   const nbAutre = r => (Array.isArray(r.autre_photos) ? r.autre_photos.length : Math.max(0, Math.min(MAX_PHOTOS_AUTRE, +r.autre_photos || 0)));
-  const ALL_DECHETS = [...new Set(DECHETS.concat(...Object.values(EXTRA)))];
+  const ALL_DECHETS = [...new Set(DECHETS.concat(...Object.values(EXTRA), ...Object.values(PAR_NIVEAU)))];
   const STATUTS = {
     bien: { label: "Bien trié", icon: "✓" },
     mal:  { label: "Mal trié",  icon: "✕" },
@@ -398,7 +413,7 @@
     $app.className = "";
     $app.innerHTML = `
       <form class="card login" id="login-form" autocomplete="on">
-        <img class="login-logo" src="logo.svg?v=20261123-0115" alt="Logo Tri sélectif" width="72" height="72">
+        <img class="login-logo" src="logo.svg?v=20261125-1805" alt="Logo Tri sélectif" width="72" height="72">
         <div class="label">Organisation · ${h(CFG.organisation)}</div>
         <h2>Connexion</h2>
         <label class="label" for="login-id">Identifiant</label>
@@ -421,6 +436,8 @@
           if (!acc || acc.erreur || !acc.jeton) throw new Error((acc && acc.erreur) || "IDENTIFIANTS_INVALIDES");
           openSession(acc);
           store.set("session", acc);
+          // accès à la partie réservée (GL5 Gourmet) différent de celui de la page : on recharge pour l'afficher ou la retirer
+          if (accesChange(acc)) { location.hash = "#/controle"; location.reload(); return; }
           S.records = [];
           location.hash = "#/controle";
           route();
@@ -513,7 +530,7 @@
     const floors = pal.niveaux.map((n, i) => {
       const L = dechetsOf(mag.nom, pal.nom, n), lv = levelValues(mag.nom, pal.nom, n), v = lv.values, c = countDone(v, L), bad = countBad(v, L);
       return `<button class="floor ${i === ni ? "on" : ""} ${c === L.length ? "done" : ""} ${bad ? "bad" : ""}" data-act="niv" data-i="${i}">
-        <b>${h(n)}</b><span>${c}/${L.length}</span>${lv.sent ? `<em title="Dernier envoi aujourd'hui">✓ ${frTime(new Date(lv.sent.date)).slice(0, 5)}</em>` : ""}</button>`;
+        <b>${h(n.split(" · ")[0])}</b>${n.includes(" · ") ? `<small class="floor-sub">${h(n.split(" · ").slice(1).join(" · "))}</small>` : ""}<span>${c}/${L.length}</span>${lv.sent ? `<em title="Dernier envoi aujourd'hui">✓ ${frTime(new Date(lv.sent.date)).slice(0, 5)}</em>` : ""}</button>`;
     }).join("");
 
     const LIST = dechetsOf(mag.nom, pal.nom, niv);
@@ -1184,7 +1201,8 @@
     const d = (CFG.directeurs || []).find(x => x.magasin === r.magasin && (!x.niveaux || x.niveaux.includes(r.niveau)));
     return d ? d.nom : "";
   };
-  const etageCourt = n => /^Étage (\d+)$/.test(n) ? n.slice(6) : /^Sous-sol (\d+)$/.test(n) ? "-" + n.slice(9) : n;
+  const etageCourt = n0 => { const n = String(n0).split(" · ")[0];   // « Étage 3 · Pilier 703 » → « 3 »
+    return /^Étage (\d+)$/.test(n) ? n.slice(6) : /^Sous-sol (\d+)$/.test(n) ? "-" + n.slice(9) : n; };
   const MOISmin = MOIS.map(m => m.toLowerCase());
   function periodesDirecteurs() {
     const out = [], now = new Date();
@@ -1910,10 +1928,11 @@
         <div class="card-head"><h2 style="font-family:var(--sans);font-size:13px">Comptes (${onlineAccounts.length})</h2>
           <span class="tag bien">Enregistrés en ligne</span></div>
         <div class="matrix-wrap"><table class="matrix acc">
-          <thead><tr><th>Identifiant</th><th>Nom affiché</th><th>Rôle</th><th></th></tr></thead>
+          <thead><tr><th>Identifiant</th><th>Nom affiché</th><th>Rôle</th><th title="Accès à la partie réservée GL5 Gourmet">GL5</th><th></th></tr></thead>
           <tbody>${onlineAccounts.map(a => `<tr>
             <th>${h(a.identifiant)}${a.identifiant === S.ident ? ` <span class="label">(toi)</span>` : ""}</th>
             <td>${h(a.nom)}${a.doit_changer ? ` <span class="label" title="Mot de passe provisoire pas encore changé">· provisoire</span>` : ""}</td><td><span class="role-tag ${ROLES[a.role] ? a.role : ""}">${h(ROLES[a.role] ? ROLES[a.role].label : a.role)}</span></td>
+            <td>${a.role !== "admin" && a.uniquement_gl5 ? `<span class="tag mal" title="Ne voit que GL5 Gourmet">GL5 seul</span>` : a.role === "admin" || a.acces_gl4 ? `<span class="tag bien" title="Voit la partie réservée GL5 Gourmet">✓ GL5</span>` : `<span class="label">—</span>`}</td>
             <td style="white-space:nowrap"><button class="linkbtn" data-act="oaccedit" data-id="${h(a.identifiant)}">Modifier</button>
               ${a.identifiant === S.ident ? "" : `· <button class="linkbtn danger" data-act="oaccdel" data-id="${h(a.identifiant)}">Supprimer</button>`}</td>
           </tr>`).join("")}</tbody>
@@ -1925,6 +1944,11 @@
           <label>Identifiant<input id="acc-id" required value="${ed ? h(ed.identifiant) : ""}" ${ed ? "readonly" : ""} autocapitalize="none" placeholder="ex. samir"></label>
           <label>Nom affiché<input id="acc-nom" required value="${ed ? h(ed.nom) : ""}" placeholder="ex. Samir"></label>
           <label>Rôle<select id="acc-role">${roleOpt(ed ? ed.role : "agent")}</select></label>
+          <label>Partie GL5 Gourmet<select id="acc-gl5">
+            <option value="non" ${!ed || (!ed.acces_gl4 && !ed.uniquement_gl5) ? "selected" : ""}>Pas d'accès</option>
+            <option value="oui" ${ed && ed.acces_gl4 && !ed.uniquement_gl5 ? "selected" : ""}>Accès en plus des autres magasins</option>
+            <option value="seul" ${ed && ed.uniquement_gl5 ? "selected" : ""}>GL5 Gourmet uniquement</option>
+          </select></label>
           <label>Mot de passe provisoire<input id="acc-pw" type="password" autocomplete="new-password" ${ed ? `placeholder="laisser vide = inchangé"` : "required"} minlength="8" maxlength="72"></label>
         </div>
         <div class="row mt">
@@ -1932,7 +1956,8 @@
           ${ed ? `<button class="btn" type="button" data-act="oacccancel">Annuler</button>` : ""}
         </div>
         <p class="hint">Les changements sont actifs immédiatement, sur tous les appareils. Le mot de passe donné ici est <b>provisoire</b> : la personne devra choisir le sien à sa connexion (8 caractères minimum, lettres et chiffres). Le changer déconnecte ses appareils et débloque le compte s'il était bloqué.<br>
-        Agent : saisie des contrôles uniquement · Spectateur : consultation seule (aucune saisie, aucun export, aucune modification) · Superviseur : paliers + consultation et export des données · Responsable : tout sauf l'effacement des données et les comptes · Administrateur : tout.</p>
+        Agent : saisie des contrôles uniquement · Spectateur : consultation seule (aucune saisie, aucun export, aucune modification) · Superviseur : paliers + consultation et export des données · Responsable : tout sauf l'effacement des données et les comptes · Administrateur : tout.<br>
+        <b>GL5 Gourmet</b> : partie réservée, visible seulement par les comptes qui y ont accès (les administrateurs la voient toujours). « GL5 Gourmet uniquement » : le compte ne voit et ne contrôle que GL5 Gourmet. La personne doit se reconnecter, ou rouvrir l'appli, pour que le changement s'applique.</p>
       </form>`;
     document.getElementById("acc-form").onsubmit = async e => {
       e.preventDefault();
@@ -1943,7 +1968,8 @@
       const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
       try {
         await call("tri_compte_enregistrer", { p_identifiant: id, p_nom: document.getElementById("acc-nom").value,
-          p_role: document.getElementById("acc-role").value, p_mot_de_passe: document.getElementById("acc-pw").value || null });
+          p_role: document.getElementById("acc-role").value, p_mot_de_passe: document.getElementById("acc-pw").value || null,
+          p_acces_gl4: document.getElementById("acc-gl5").value !== "non", p_uniquement_gl5: document.getElementById("acc-gl5").value === "seul" });
         toast(ed ? "Compte modifié" : "Compte créé — il peut se connecter tout de suite");
         renderComptesOnline(null, true);
       } catch (ex) { toast(errMsg(ex)); btn.disabled = false; }
@@ -2147,7 +2173,9 @@
         if (ONLINE && myOutbox().length && !confirm(`${myOutbox().length} contrôle(s) n'ont pas encore pu être envoyés (pas de réseau). Ils partiront à ta prochaine connexion sur cet appareil. Se déconnecter quand même ?`)) return;
         if (Object.keys(S.draft).length && !confirm("Une saisie non envoyée est en cours. Elle restera sur cet appareil. Se déconnecter ?")) return;
         if (ONLINE && S.jeton) api("tri_deconnexion", { p_jeton: S.jeton }).catch(() => {});
-        closeSession(); history.replaceState(null, "", location.pathname); route(); break;
+        closeSession(); history.replaceState(null, "", location.pathname);
+        if (ACCES_GL4 || SEUL_GL5) { location.reload(); return; }   // remet la liste normale des magasins sur cet appareil
+        route(); break;
       case "mag": S.ui.mag = +el.dataset.i; S.ui.pal = 0; saveUi(); renderControle(); break;
       case "pal": S.ui.pal = +el.dataset.i; saveUi(); renderControle(); break;
       case "niv": S.ui.niv[current.palKey] = +el.dataset.i; saveUi(); renderControle(); break;
@@ -2303,6 +2331,7 @@
     // En ligne : vérifie la session, envoie ce qui attend, récupère les nouveaux contrôles.
     if (ONLINE && S.jeton) {
       call("tri_moi").then(me => {
+        if (accesChange(me)) { store.set("session", Object.assign({}, me, { jeton: S.jeton })); location.reload(); return; }
         if (me.role !== S.role || me.nom !== S.user) { openSession(Object.assign({}, me, { jeton: S.jeton })); store.set("session", Object.assign({}, me, { jeton: S.jeton })); route(); }
       }).catch(() => {});
       syncAll(!store.get("syncAt", null));
