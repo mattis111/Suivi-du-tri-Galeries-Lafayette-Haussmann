@@ -132,7 +132,7 @@
     draft: store.get("draft", {}),
     ui: store.get("ui", { mag: 0, pal: 0, niv: {} }),
     hist: { period: "", mag: "", pal: "", niv: "", agent: "", statut: "", du: "", au: "", q: "", size: 20, page: 0 },
-    sup: { agent: "", y: new Date().getFullYear(), m: new Date().getMonth() },
+    sup: { org: "", agent: "", y: new Date().getFullYear(), m: new Date().getMonth() },
     ana: { mag: 0, pal: 0, niv: 0, dechet: "" },
     dash: { per: "3m", agent: "", dechet: "" }
   };
@@ -413,7 +413,7 @@
     $app.className = "";
     $app.innerHTML = `
       <form class="card login" id="login-form" autocomplete="on">
-        <img class="login-logo" src="logo.svg?v=20261125-1805" alt="Logo Tri sélectif" width="72" height="72">
+        <img class="login-logo" src="logo.svg?v=20261125-2330" alt="Logo Tri sélectif" width="72" height="72">
         <div class="label">Organisation · ${h(CFG.organisation)}</div>
         <h2>Connexion</h2>
         <label class="label" for="login-id">Identifiant</label>
@@ -2051,14 +2051,31 @@
   }
 
   /* ---------------- Supervision (calendrier) ---------------- */
+  /* Organisations de la supervision : DESPS (magasins normaux) et la société de la partie réservée
+     (config.js → magasin restreint « organisation », ex. Samsic pour GL5 Gourmet).
+     Le choix n'apparaît que pour les comptes qui voient la partie réservée. */
+  const ORG_RESTREINTE = (CFG.magasins.find(m => m.restreint) || {}).organisation || "";
+  const orgsVisibles = () => {
+    const o = [];
+    if (CFG.magasins.some(m => !m.restreint)) o.push(CFG.organisation);
+    if (ORG_RESTREINTE && CFG.magasins.some(m => m.restreint)) o.push(ORG_RESTREINTE);
+    return o;
+  };
+  const orgDe = r => MAGS_RESTREINTS.includes(r.magasin) ? ORG_RESTREINTE || r.magasin : CFG.organisation;
+
   function renderSupervision() {
     const P = S.sup;
+    const ORGS = orgsVisibles();
+    if (!ORGS.includes(P.org)) P.org = ORGS[0] || CFG.organisation;
+    const recs = S.records.filter(r => orgDe(r) === P.org);
+    const agentsOrg = [...new Set(recs.map(r => r.agent).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr"));
+    if (P.agent && !agentsOrg.includes(P.agent)) P.agent = "";
     const first = new Date(P.y, P.m, 1), days = new Date(P.y, P.m + 1, 0).getDate();
     const offset = (first.getDay() + 6) % 7;
     const now = new Date();
     // qui a contrôlé chaque demi-journée (tous les prénoms si plusieurs personnes ont fait le contrôle)
     const qui = {};
-    S.records.filter(r => !P.agent || r.agent === P.agent).forEach(r => {
+    recs.filter(r => !P.agent || r.agent === P.agent).forEach(r => {
       const k = halfId(new Date(r.date)), nom = String(r.agent || "?").trim();
       (qui[k] || (qui[k] = new Set())).add(nom);
     });
@@ -2089,9 +2106,11 @@
       <div class="mt"><span class="chip-org">Supervision société</span></div>
       <div class="mt"><button class="btn" data-act="refresh">↻ Actualiser</button></div>
       <div class="row mt" style="align-items:flex-end">
-        <div><div class="label">Organisation</div><div class="org-box mt" style="margin-top:4px">${h(CFG.organisation)}</div></div>
+        <div><div class="label">Organisation</div>${ORGS.length > 1
+          ? `<div class="org-switch" role="group" aria-label="Organisation">${ORGS.map(o => `<button class="org-box ${o === P.org ? "on" : ""}" data-act="suporg" data-org="${h(o)}">${h(o)}</button>`).join("")}</div>`
+          : `<div class="org-box mt" style="margin-top:4px">${h(P.org)}</div>`}</div>
         <div class="filters"><div class="label">Agent</div>
-          <select id="sup-agent" style="margin-top:4px">${["", ...agents()].map(a => `<option value="${h(a)}" ${a === P.agent ? "selected" : ""}>${a ? h(a) : "Tous"}</option>`).join("")}</select>
+          <select id="sup-agent" style="margin-top:4px">${["", ...agentsOrg].map(a => `<option value="${h(a)}" ${a === P.agent ? "selected" : ""}>${a ? h(a) : "Tous"}</option>`).join("")}</select>
         </div>
       </div>
       <div class="month-nav mt">
@@ -2289,8 +2308,10 @@
         const m = S.sup.m + +el.dataset.d;
         S.sup.y += Math.floor(m / 12); S.sup.m = (m + 12) % 12; renderSupervision(); break;
       }
+      case "suporg": S.sup.org = el.dataset.org; S.sup.agent = ""; renderSupervision(); break;
       case "day":
-        Object.assign(S.hist, { du: el.dataset.day, au: el.dataset.day, period: "", agent: S.sup.agent, page: 0 });
+        Object.assign(S.hist, { du: el.dataset.day, au: el.dataset.day, period: "", agent: S.sup.agent, page: 0,
+          pal: "", niv: "", mag: S.sup.org && S.sup.org === ORG_RESTREINTE ? MAGS_RESTREINTS[0] : "" });
         location.hash = "#/suivi/historique"; break;
       case "demo": generateDemo(); break;
       case "wipe":

@@ -68,6 +68,7 @@ window.APP_CONFIG = {
       // Le serveur refuse aussi d'envoyer ou de montrer ces contrôles aux autres comptes.
       nom: "GL5 Gourmet",
       restreint: true,
+      organisation: "Samsic",   // supervision à part : « Organisation : Samsic »
       paliers: [
         { nom: "Gourmet", niveaux: ["Étage 5 · Pilier 711", "Étage 4 · Pilier 711", "Étage 3 · Pilier 703",
                                     "Étage 2 · Pilier 703", "Étage 1 · Pilier 703", "Sous-sol 1 · Pilier 703"] }

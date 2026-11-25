@@ -578,3 +578,8 @@ html[data-theme="dark"] .loading { background: rgba(0, 0, 0, .65); }
 
 /* Précision sous le nom de l'étage (ex. « Pilier 711 » pour GL5 Gourmet) */
 .floor .floor-sub { display: block; font-family: var(--mono); font-size: 8.5px; color: var(--muted); white-space: nowrap; margin: 1px 0 2px; }
+
+/* Choix de l'organisation dans la supervision (DESPS / Samsic) */
+.org-switch { display: flex; gap: 6px; margin-top: 4px; }
+.org-switch .org-box { cursor: pointer; background: var(--card); color: var(--muted); font-family: inherit; }
+.org-switch .org-box.on { background: var(--sel); color: var(--ink); border-color: var(--ink); }
