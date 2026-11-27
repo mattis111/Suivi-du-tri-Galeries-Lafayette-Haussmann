@@ -419,7 +419,7 @@
     $app.className = "";
     $app.innerHTML = `
       <form class="card login" id="login-form" autocomplete="on">
-        <img class="login-logo" src="logo.svg?v=20261125-2359" alt="Logo Tri sélectif" width="72" height="72">
+        <img class="login-logo" src="logo.svg?v=20261127-2150" alt="Logo Tri sélectif" width="72" height="72">
         <div class="label">Organisation · ${h(CFG.organisation)}</div>
         <h2>Connexion</h2>
         <label class="label" for="login-id">Identifiant</label>
@@ -1208,7 +1208,7 @@
     return d ? d.nom : "";
   };
   const etageCourt = n0 => { const n = String(n0).split(" · ")[0];   // « Étage 3 · Pilier 703 » → « 3 »
-    return /^Étage (\d+)$/.test(n) ? n.slice(6) : /^Sous-sol (\d+)$/.test(n) ? "-" + n.slice(9) : n; };
+    return /^Étage \d+( .*)?$/.test(n) ? n.slice(6) : /^Sous-sol \d+$/.test(n) ? "-" + n.slice(9) : n; };   // « Étage 1 SAS » → « 1 SAS »
   const MOISmin = MOIS.map(m => m.toLowerCase());
   function periodesDirecteurs() {
     const out = [], now = new Date();

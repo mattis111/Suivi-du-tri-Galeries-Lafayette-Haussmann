@@ -58,7 +58,7 @@ window.APP_CONFIG = {
       paliers: [
         {
           nom: "Homme",
-          niveaux: ["Étage 4", "Étage 3", "Étage 2", "Étage 1", "RDC", "Sous-sol 1"]
+          niveaux: ["Étage 4", "Étage 3", "Étage 2", "Étage 1", "Étage 1 SAS · Pilier 815", "Étage 1 SAS · Pilier 803", "RDC", "Sous-sol 1"]
         }
       ]
     },
@@ -79,12 +79,14 @@ window.APP_CONFIG = {
   // Poubelles propres à un niveau : REMPLACENT la liste « dechets » pour ce niveau (dans cet ordre).
   // Format : "Magasin|Palier|Niveau": ["Nom de la poubelle", ...]
   dechetsParNiveau: {
+    "Homme|Homme|Étage 1 SAS · Pilier 815": ["Rolls cartons", "DIB", "Papier", "Plastique"],
+    "Homme|Homme|Étage 1 SAS · Pilier 803": ["Rolls cartons", "DIB", "Papier", "Plastique"],
     "GL5 Gourmet|Gourmet|Étage 5 · Pilier 711": ["Rolls cartons", "DIB", "Papier", "Plastique"],
-    "GL5 Gourmet|Gourmet|Étage 4 · Pilier 711": ["Papier", "Plastique", "DIB", "Rolls cartons"],
-    "GL5 Gourmet|Gourmet|Étage 3 · Pilier 703": ["Papier", "Plastique", "Rolls cartons", "DIB", "Poubelle porcelaine"],
+    "GL5 Gourmet|Gourmet|Étage 4 · Pilier 711": ["Rolls cartons", "DIB", "Papier", "Plastique"],
+    "GL5 Gourmet|Gourmet|Étage 3 · Pilier 703": ["Rolls cartons", "DIB", "Papier", "Plastique", "Poubelle porcelaine"],
     "GL5 Gourmet|Gourmet|Étage 2 · Pilier 703": ["Rolls cartons", "DIB", "Papier", "Plastique"],
-    "GL5 Gourmet|Gourmet|Étage 1 · Pilier 703": ["Local DIB", "Rolls cartons"],
-    "GL5 Gourmet|Gourmet|Sous-sol 1 · Pilier 703": ["Plastique", "Rolls cartons"]
+    "GL5 Gourmet|Gourmet|Étage 1 · Pilier 703": ["Rolls cartons", "Local DIB"],
+    "GL5 Gourmet|Gourmet|Sous-sol 1 · Pilier 703": ["Rolls cartons", "Plastique"]
   },
 
   // Heure (0-23) à laquelle le matin se termine et l'après-midi commence,
